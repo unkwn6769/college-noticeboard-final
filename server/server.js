@@ -8,7 +8,7 @@ const app = express();
 
 app.use(cors());
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 const departments = [
   "civil-noticeboard",
@@ -500,8 +500,6 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(
-    `Backend running at http://localhost:${PORT}`
-  );
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Backend running on port ${PORT}`);
 });

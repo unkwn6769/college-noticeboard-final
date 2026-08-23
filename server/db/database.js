@@ -2,11 +2,18 @@ import pg from "pg";
 
 const { Pool } = pg;
 
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error("DATABASE_URL is not set");
+}
+
 export const pool = new Pool({
-  host: "localhost",
-  port: 5432,
-  database: "college_noticeboard",
-  user: "badrisatwik",
+  connectionString,
+  ssl:
+    process.env.NODE_ENV === "production"
+      ? { rejectUnauthorized: false }
+      : undefined,
 });
 
 pool.on("error", (error) => {

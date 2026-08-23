@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { departments } from "../data/departments";
+import { API_URL } from "../config/api";
 
 const icons = {
   Code2,
@@ -60,9 +61,7 @@ function Home() {
           loading: true,
         }));
 
-        const response = await fetch(
-          "http://localhost:3001/api/overview"
-        );
+        const response = await fetch(`${API_URL}/api/overview`);
 
         if (!response.ok) {
           throw new Error("Failed to load overview");
@@ -151,9 +150,7 @@ function Home() {
         setSearchLoading(true);
 
         const response = await fetch(
-          `http://localhost:3001/api/search?q=${encodeURIComponent(
-            query
-          )}`,
+          `${API_URL}/api/search?q=${encodeURIComponent(query)}`,
           {
             signal: controller.signal,
           }

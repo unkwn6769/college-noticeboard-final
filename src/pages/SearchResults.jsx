@@ -8,6 +8,7 @@ import {
   FileText,
   Search,
 } from "lucide-react";
+import { API_URL } from "../config/api";
 
 function SearchResults() {
   const [searchParams] = useSearchParams();
@@ -31,7 +32,7 @@ function SearchResults() {
         setLoading(true);
 
         const response = await fetch(
-          `http://localhost:3001/api/search?q=${encodeURIComponent(query)}`,
+          `${API_URL}/api/search?q=${encodeURIComponent(query)}`,
           {
             signal: controller.signal,
           }

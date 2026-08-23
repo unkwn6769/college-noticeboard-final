@@ -20,6 +20,7 @@ import {
   FileSpreadsheet,
   ExternalLink
 } from "lucide-react";
+import { API_URL } from "../config/api";
 
 function FileViewer() {
   const { slug } = useParams();
@@ -68,18 +69,15 @@ function FileViewer() {
       "/",
   }));
 
-  const fileUrl = `http://localhost:3001/api/file?path=${encodeURIComponent(
-    path
-  )}`;
+  const fileUrl =
+  `${API_URL}/api/file?path=${encodeURIComponent(path)}`
 
   useEffect(() => {
     let cancelled = false;
 
     async function checkFileStatus() {
       try {
-        const response = await fetch(
-          `http://localhost:3001/api/file-status?path=${encodeURIComponent(path)}`
-        );
+        const response = await fetch(`${API_URL}/api/file?path=${encodeURIComponent(path)}`);
 
         if (!cancelled) {
           setFileUnavailable(response.status === 410);

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { departments } from "../data/departments";
+import { API_URL } from "../config/api";
 
 function Department() {
   const { slug } = useParams();
@@ -45,9 +46,7 @@ function Department() {
         setError("");
 
         const response = await fetch(
-          `http://localhost:3001/api/browse?path=${encodeURIComponent(
-            currentPath
-          )}`
+          `${API_URL}/api/browse?path=${encodeURIComponent(currentPath)}`
         );
 
         if (!response.ok) {

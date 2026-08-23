@@ -27,7 +27,9 @@ const departments = [
   "it-noticeboard",
   "mech-noticeboard",
 ];
-
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
 app.get("/api/browse", async (req, res) => {
   try {
     const rawPath = String(req.query.path || "").trim();

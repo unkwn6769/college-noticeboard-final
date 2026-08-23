@@ -1,0 +1,92 @@
+export const departments = [
+    {
+        name: "Computer Science & Engineering",
+        shortName: "CSE",
+        slug: "cse-noticeboard",
+        icon: "Code2",
+    },
+    {
+        name: "CSE — Artificial Intelligence & Machine Learning",
+        shortName: "CSE AI/ML",
+        slug: "cseaiml-noticeboard",
+        icon: "BrainCircuit",
+    },
+    {
+        name: "CSE — Data Science",
+        shortName: "CSE DS",
+        slug: "cseds-noticeboard",
+        icon: "Database",
+    },
+    {
+        name: "CSE — Cyber Security",
+        shortName: "CSE CS",
+        slug: "csecs-noticeboard",
+        icon: "Network",
+    },
+    {
+        name: "Computer Science & Information Technology",
+        shortName: "CSIT",
+        slug: "csit-noticeboard",
+        icon: "Monitor",
+    },
+    {
+        name: "Electronics & Communication Engineering",
+        shortName: "ECE",
+        slug: "ece-noticeboard",
+        icon: "Radio",
+    },
+    {
+        name: "Electrical & Electronics Engineering",
+        shortName: "EEE",
+        slug: "eee-noticeboard",
+        icon: "Zap",
+    },
+    {
+        name: "Electronics & Instrumentation Engineering",
+        shortName: "EIE",
+        slug: "eie-noticeboard",
+        icon: "Gauge",
+    },
+    {
+        name: "Information Technology",
+        shortName: "IT",
+        slug: "it-noticeboard",
+        icon: "Globe",
+    },
+    {
+        name: "Mechanical Engineering",
+        shortName: "Mechanical",
+        slug: "mech-noticeboard",
+        icon: "Cog",
+    },
+    {
+        name: "Civil Engineering",
+        shortName: "Civil",
+        slug: "civil-noticeboard",
+        icon: "Building2",
+    },
+    {
+        name: "Examinations",
+        shortName: "Exams",
+        slug: "exams-noticeboard",
+        icon: "FileText",
+    },
+    {
+        name: "General Notices",
+        shortName: "General",
+        slug: "gen-noticeboard",
+        icon: "Megaphone",
+    },
+    {
+        name: "Humanities & Sciences",
+        shortName: "H&S",
+        slug: "hns-noticeboard",
+        icon: "BookOpen",
+    },
+    {
+        name: "Engineering Technology",
+        shortName: "ET",
+        slug: "et-noticeboard",
+        icon: "Cpu",
+    },
+];

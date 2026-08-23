@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+.env
+.env.*
+
+*.log
+
+*.dump
+
+verification-results.jsonl
+failed-source-verification.json.DS_Store

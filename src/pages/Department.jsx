@@ -437,8 +437,10 @@ function Department() {
                   <Link
                     key={item.path}
                     to={`/file/${slug}?path=${encodeURIComponent(
-                      item.path
-                    )}&from=${encodeURIComponent(currentPath)}`}
+                      decodeURIComponent(item.path)
+                    )}&from=${encodeURIComponent(
+                      decodeURIComponent(currentPath)
+                    )}`}
                     className="group flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
                   >
 

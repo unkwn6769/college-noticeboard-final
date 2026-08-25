@@ -162,11 +162,11 @@ function SearchResults() {
               const href =
                 result.type === "folder"
                   ? `/department/${result.department}?path=${encodeURIComponent(
-                      path
-                    )}`
+                    path
+                  )}`
                   : `/file/${result.department}?path=${encodeURIComponent(
-                      path
-                    )}`;
+                    decodeURIComponent(path)
+                  )}`;
 
               return (
                 <a

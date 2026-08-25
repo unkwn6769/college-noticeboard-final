@@ -201,7 +201,8 @@ app.get("/api/file", async (req, res) => {
         if (!segment) return "";
 
         return encodeURIComponent(decodeURIComponent(segment))
-          .replace(/%40/gi, "@");
+          .replace(/%40/gi, "@")
+          .replace(/%24/gi, "$");
       })
       .join("/");
 

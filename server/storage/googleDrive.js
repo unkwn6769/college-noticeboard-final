@@ -1,26 +1,20 @@
+import { getGoogleDriveClient } from "./googleClient.js";
+
 export async function getGoogleDriveFile(resource) {
-  const baseUrl = process.env.NINE_DRIVE_URL;
-  const apiKey = process.env.NINE_DRIVE_API_KEY;
-
-  if (!baseUrl) {
-    throw new Error("NINE_DRIVE_URL is not configured");
-  }
-
-  if (!apiKey) {
-    throw new Error("NINE_DRIVE_API_KEY is not configured");
-  }
-
   if (!resource.storage_key) {
     throw new Error("Google Drive resource has no storage_key");
   }
 
-  const url =
-    `${baseUrl.replace(/\/+$/, "")}` +
-    `/api/v1/files/${encodeURIComponent(resource.storage_key)}/download`;
+  const drive = await getGoogleDriveClient(resource.storage_key);
+
+  const metadata = await drive.files.get({
+    fileId: resource.storage_key,
+    fields: "id,name,size,mimeType",
+  });
 
   return {
     type: "google_drive",
-    url,
-    apiKey,
+    drive,
+    metadata: metadata.data,
   };
 }

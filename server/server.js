@@ -199,7 +199,9 @@ app.get("/api/file", async (req, res) => {
       .split("/")
       .map((segment) => {
         if (!segment) return "";
-        return encodeURIComponent(decodeURIComponent(segment));
+
+        return encodeURIComponent(decodeURIComponent(segment))
+          .replace(/%40/gi, "@");
       })
       .join("/");
 
@@ -272,33 +274,27 @@ app.get("/api/file", async (req, res) => {
     const storage = await getFileStream(resource);
 
     if (storage.type === "google_drive") {
-      const headers = {
-        Authorization: `Bearer ${storage.apiKey}`,
-      };
-
-      const response = await fetch(storage.url, {
-        headers,
-      });
-
-      if (!response.ok) {
-        const message = await response.text().catch(() => "");
-
-        return res.status(response.status).json({
-          error: "9Drive returned an error",
-          status: response.status,
-          message,
-          path,
-        });
-      }
+      const response = await storage.drive.files.get(
+        {
+          fileId: resource.storage_key,
+          alt: "media",
+        },
+        {
+          responseType: "stream",
+        }
+      );
 
       const contentType =
-        response.headers.get("content-type") ||
+        storage.metadata?.mimeType ||
         "application/octet-stream";
 
       const contentLength =
-        response.headers.get("content-length");
+        storage.metadata?.size != null
+          ? String(storage.metadata.size)
+          : null;
 
       const fileName =
+        resource.name ||
         decodeURIComponent(
           path.split("/").filter(Boolean).pop() ||
           "download"
@@ -324,21 +320,22 @@ app.get("/api/file", async (req, res) => {
         );
       }
 
-      if (!response.body) {
-        return res.end();
-      }
+      response.data.on("error", (error) => {
+        console.error("Google Drive stream failed:", error);
 
-      const reader = response.body.getReader();
+        if (!res.headersSent) {
+          res.status(502).json({
+            error: "Google Drive stream failed",
+            message: error.message,
+          });
+        } else {
+          res.destroy(error);
+        }
+      });
 
-      while (true) {
-        const { done, value } = await reader.read();
+      response.data.pipe(res);
 
-        if (done) break;
-
-        res.write(Buffer.from(value));
-      }
-
-      return res.end();
+      return;
     }
 
     return res.status(500).json({

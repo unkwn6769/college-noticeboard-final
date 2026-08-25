@@ -86,6 +86,31 @@ CREATE INDEX IF NOT EXISTS idx_resources_source_modified_at
 CREATE INDEX IF NOT EXISTS idx_resources_last_seen
     ON resources(last_seen_at);
 
+CREATE TABLE IF NOT EXISTS google_drive_accounts (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    provider_account_id TEXT NOT NULL,
+    client_id_encrypted TEXT NOT NULL,
+    client_secret_encrypted TEXT NOT NULL,
+    access_token_encrypted TEXT NOT NULL,
+    refresh_token_encrypted TEXT NOT NULL,
+    token_expires_at TIMESTAMPTZ,
+    redirect_uri TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'connected',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS google_drive_file_accounts (
+    file_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL
+        REFERENCES google_drive_accounts(id)
+        ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_google_drive_file_accounts_account
+    ON google_drive_file_accounts(account_id);
+
 CREATE TABLE IF NOT EXISTS sync_runs (
     id BIGSERIAL PRIMARY KEY,
 

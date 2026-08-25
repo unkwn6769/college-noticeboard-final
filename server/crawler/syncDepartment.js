@@ -281,11 +281,9 @@ export async function syncDepartment(slug, syncRunId) {
     updated = updatedResult.rows[0].count;
 
     /*
- * Insert new resources.
- *
- * New files start in the college storage state.
- * The storage worker will later upload them to 9Drive.
- */
+      * New files start in the college storage state.
+      * The storage worker will later upload them to Google Drive.
+    */
     await client.query(`
   INSERT INTO resources (
     department_id,

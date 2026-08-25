@@ -1,7 +1,6 @@
 import { pool } from "../db/database.js";
 import { syncDepartment } from "./syncDepartment.js";
-import { downloadCollegeFile } from "../storage/college.js";
-import { uploadBufferTo9Drive } from "../storage/nineDrive.js";
+import { syncFileToGoogleDrive } from "./storageSync.js";
 
 const departments = [
   "civil-noticeboard",
@@ -25,181 +24,7 @@ function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isCollegeNotFoundError(error) {
-  return (
-    error?.code === "COLLEGE_FILE_NOT_FOUND" ||
-    error?.status === 404
-  );
-}
 
-function isCollegeHttpError(error) {
-  return (
-    error?.code === "COLLEGE_HTTP_ERROR" ||
-    (typeof error?.status === "number" && error.status >= 400)
-  );
-}
-
-async function syncFileTo9Drive(resource) {
-  // Never create a duplicate 9Drive object for an already-synced
-  // resource that still has a valid storage key.
-  if (
-    resource.storage_provider === "google_drive" &&
-    resource.storage_status === "synced" &&
-    resource.storage_key
-  ) {
-    console.log(
-      `[${resource.id}] STORAGE ALREADY SYNCED → ${resource.storage_key}`
-    );
-
-    return {
-      success: true,
-      status: "already_synced",
-    };
-  }
-
-  try {
-    const buffer = await downloadCollegeFile(resource);
-
-    // Never upload a corrupt/incomplete download.
-    if (
-      resource.size !== null &&
-      buffer.length !== Number(resource.size)
-    ) {
-      const error = new Error(
-        `Size mismatch: expected ${resource.size}, got ${buffer.length}`
-      );
-
-      error.code = "COLLEGE_SIZE_MISMATCH";
-
-      throw error;
-    }
-
-    const storageKey = await uploadBufferTo9Drive(
-      resource,
-      buffer
-    );
-
-    await pool.query(
-      `
-      UPDATE resources
-      SET
-        storage_provider = 'google_drive',
-        storage_key = $1,
-        storage_status = 'synced',
-        storage_error = NULL,
-        is_available = TRUE,
-        updated_at = NOW()
-      WHERE id = $2
-      `,
-      [storageKey, resource.id]
-    );
-
-    console.log(
-      `[${resource.id}] STORAGE SYNCED → ${storageKey}`
-    );
-
-    return {
-      success: true,
-      status: "synced",
-    };
-  } catch (error) {
-    const message = getErrorMessage(error);
-
-    /*
-     * A confirmed 404 means the source server cannot currently
-     * serve the file. The database record is retained, but the
-     * resource is marked unavailable.
-     */
-    if (isCollegeNotFoundError(error)) {
-      await pool.query(
-        `
-        UPDATE resources
-        SET
-          is_available = FALSE,
-          crawl_status = 'http_error',
-          storage_provider = NULL,
-          storage_key = NULL,
-          storage_status = 'failed',
-          storage_error = $2,
-          updated_at = NOW()
-        WHERE id = $1
-        `,
-        [resource.id, "source_404"]
-      );
-
-      console.error(
-        `[${resource.id}] SOURCE 404 → marked unavailable`
-      );
-
-      return {
-        success: false,
-        status: "source_404",
-      };
-    }
-
-    /*
-     * Other college HTTP failures are not proof that the source
-     * file is gone, so keep the resource available.
-     */
-    if (isCollegeHttpError(error)) {
-      await pool.query(
-        `
-        UPDATE resources
-        SET
-          crawl_status = 'http_error',
-          storage_provider = NULL,
-          storage_key = NULL,
-          storage_status = 'failed',
-          storage_error = $2,
-          updated_at = NOW()
-        WHERE id = $1
-        `,
-        [resource.id, message]
-      );
-
-      console.error(
-        `[${resource.id}] COLLEGE HTTP ERROR → ${message}`
-      );
-
-      return {
-        success: false,
-        status: "http_error",
-      };
-    }
-
-    /*
-     * Network failures, timeouts, size mismatches, and 9Drive
-     * failures must not make the source resource unavailable.
-     */
-    const storageError =
-      error?.code === "COLLEGE_SIZE_MISMATCH"
-        ? "size_mismatch"
-        : message;
-
-    await pool.query(
-      `
-      UPDATE resources
-      SET
-        storage_provider = NULL,
-        storage_key = NULL,
-        storage_status = 'failed',
-        storage_error = $2,
-        updated_at = NOW()
-      WHERE id = $1
-      `,
-      [resource.id, storageError]
-    );
-
-    console.error(
-      `[${resource.id}] STORAGE SYNC FAILED: ${message}`
-    );
-
-    return {
-      success: false,
-      status: "failed",
-    };
-  }
-}
 
 async function main() {
   const startedAt = Date.now();
@@ -265,7 +90,7 @@ async function main() {
 
         for (const resource of storageQueue) {
           const storageResult =
-            await syncFileTo9Drive(resource);
+            await syncFileToGoogleDrive(resource);
 
           if (storageResult.success) {
             if (
@@ -440,9 +265,9 @@ async function main() {
         totals.updated,
         totals.removed,
         totals.httpErrors +
-          totals.fetchErrors +
-          totalStorageFailed +
-          failedDepartments.length,
+        totals.fetchErrors +
+        totalStorageFailed +
+        failedDepartments.length,
         syncRunId,
       ]
     );

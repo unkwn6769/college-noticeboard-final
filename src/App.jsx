@@ -5,6 +5,10 @@ import Department from "./pages/Department";
 import FileViewer from "./pages/FileViewer";
 import SearchResults from "./pages/SearchResults";
 
+import AdminLogin from "./pages/admin/AdminLogin";
+import AdminDashboard from "./pages/admin/AdminDashboard";
+import AdminAccounts from "./pages/admin/AdminAccounts";
+
 function App() {
   return (
     <BrowserRouter>
@@ -28,6 +32,21 @@ function App() {
         <Route
           path="/file/:slug"
           element={<FileViewer />}
+        />
+
+        <Route
+          path="/admin/login"
+          element={<AdminLogin />}
+        />
+
+        <Route
+          path="/admin"
+          element={<AdminDashboard />}
+        />
+
+        <Route
+          path="/admin/accounts"
+          element={<AdminAccounts />}
         />
 
       </Routes>

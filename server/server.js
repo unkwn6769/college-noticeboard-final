@@ -1,12 +1,52 @@
 import express from "express";
-
 import cors from "cors";
-
 import { pool } from "./db/database.js";
 import contentDisposition from "content-disposition";
+
+import {
+  getGoogleAuthorizationUrl,
+  handleGoogleCallback,
+  getAdminFromSession,
+  deleteAdminSession,
+  parseSessionCookie,
+  setSessionCookie,
+  clearSessionCookie,
+  requireAdmin,
+} from "./adminAuth.js";
+import {
+  getConnectedGoogleDriveAccounts,
+} from "./storage/googleClient.js";
+import {
+  getDriveAccountAuthorizationUrl,
+  handleDriveAccountCallback,
+} from "./driveAccountOAuth.js";
+
 const app = express();
 
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://college-noticeboard.onrender.com",
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow non-browser requests such as curl.
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error("CORS origin not allowed")
+      );
+    },
+    credentials: true,
+  })
+);
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -27,6 +67,360 @@ const departments = [
   "it-noticeboard",
   "mech-noticeboard",
 ];
+
+app.get(
+  "/api/admin/accounts",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT
+          a.id,
+          a.email,
+          a.status,
+          a.created_at,
+          a.updated_at,
+          COUNT(f.file_id)::bigint AS file_count
+        FROM google_drive_accounts a
+        LEFT JOIN google_drive_file_accounts f
+          ON f.account_id = a.id
+        GROUP BY
+          a.id,
+          a.email,
+          a.status,
+          a.created_at,
+          a.updated_at
+        ORDER BY a.email
+      `);
+
+      const dbAccounts = result.rows;
+
+      const connected =
+        await getConnectedGoogleDriveAccounts();
+
+      const liveById = new Map(
+        connected.map(({ account, drive }) => [
+          account.connected_account_id,
+          { account, drive },
+        ])
+      );
+
+      const accounts = [];
+
+      for (const row of dbAccounts) {
+        const live = liveById.get(row.id);
+
+        let quota = null;
+
+        if (live) {
+          try {
+            const about =
+              await live.drive.about.get({
+                fields: "storageQuota,user",
+              });
+
+            const storageQuota =
+              about.data.storageQuota;
+
+            if (
+              storageQuota?.limit &&
+              storageQuota?.usage
+            ) {
+              const limit = BigInt(
+                storageQuota.limit
+              );
+
+              const usage = BigInt(
+                storageQuota.usage
+              );
+
+              quota = {
+                limitBytes: limit.toString(),
+                usageBytes: usage.toString(),
+                freeBytes: (
+                  limit - usage
+                ).toString(),
+              };
+            }
+          } catch (error) {
+            console.error(
+              `Failed to read quota for ${row.email}:`,
+              error instanceof Error
+                ? error.message
+                : error
+            );
+          }
+        }
+
+        accounts.push({
+          id: row.id,
+          email: row.email,
+          status: row.status,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          fileCount: Number(row.file_count),
+          quota,
+        });
+      }
+
+      res.json({ accounts });
+    } catch (error) {
+      console.error(
+        "Admin Google account listing failed:",
+        error
+      );
+
+      res.status(500).json({
+        error: "Failed to load Google Drive accounts",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/auth/google",
+  (req, res) => {
+    try {
+      const url =
+        getGoogleAuthorizationUrl();
+
+      res.redirect(url);
+    } catch (error) {
+      console.error(
+        "Admin Google login start failed:",
+        error
+      );
+
+      res.status(500).json({
+        error: "Failed to start admin login",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/auth/google/callback",
+  async (req, res) => {
+    try {
+      const { code, state } = req.query;
+
+      const result =
+        await handleGoogleCallback(
+          String(code || ""),
+          String(state || "")
+        );
+
+      setSessionCookie(
+        res,
+        result.sessionId
+      );
+
+      const frontendUrl =
+        process.env.FRONTEND_URL || "http://localhost:5173";
+
+      res.redirect(`${frontendUrl}/admin`);
+    } catch (error) {
+      console.error(
+        "Admin Google callback failed:",
+        error
+      );
+
+      res.status(403).send(`
+        <!doctype html>
+        <html>
+          <body>
+            <h1>Admin login failed</h1>
+            <p>${String(
+        error.message ||
+        "Authorization failed"
+      )}</p>
+            <a href="/admin/login">
+              Back to admin login
+            </a>
+          </body>
+        </html>
+      `);
+    }
+  }
+);
+
+app.get(
+  "/api/admin/auth/me",
+  async (req, res) => {
+    try {
+      const sessionId =
+        parseSessionCookie(req);
+
+      const admin =
+        await getAdminFromSession(
+          sessionId
+        );
+
+      if (!admin) {
+        return res.status(401).json({
+          authenticated: false,
+        });
+      }
+
+      return res.json({
+        authenticated: true,
+        email: admin.email,
+      });
+    } catch (error) {
+      console.error(
+        "Admin session lookup failed:",
+        error
+      );
+
+      return res.status(500).json({
+        error: "Failed to check admin session",
+      });
+    }
+  }
+);
+
+app.post(
+  "/api/admin/auth/logout",
+  async (req, res) => {
+    try {
+      const sessionId =
+        parseSessionCookie(req);
+
+      await deleteAdminSession(
+        sessionId
+      );
+
+      clearSessionCookie(res);
+
+      res.json({
+        authenticated: false,
+      });
+    } catch (error) {
+      console.error(
+        "Admin logout failed:",
+        error
+      );
+
+      res.status(500).json({
+        error: "Failed to log out",
+      });
+    }
+  }
+);
+
+
+app.get(
+  "/api/admin/accounts/google/start",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const sessionId = parseSessionCookie(req);
+
+      if (!sessionId) {
+        return res.status(401).json({
+          error: "Admin authentication required",
+        });
+      }
+
+      const url =
+        getDriveAccountAuthorizationUrl(
+          sessionId
+        );
+
+      res.redirect(url);
+    } catch (error) {
+      console.error(
+        "Drive account OAuth start failed:",
+        error
+      );
+
+      res.status(500).json({
+        error:
+          "Failed to start Google Drive account connection",
+      });
+    }
+  }
+);app.get(
+  "/api/admin/accounts/google/start",
+  requireAdmin,
+  (req, res) => {
+    try {
+      const sessionId = parseSessionCookie(req);
+
+      if (!sessionId) {
+        return res.status(401).json({
+          error: "Admin authentication required",
+        });
+      }
+
+      const url =
+        getDriveAccountAuthorizationUrl(
+          sessionId
+        );
+
+      res.redirect(url);
+    } catch (error) {
+      console.error(
+        "Drive account OAuth start failed:",
+        error
+      );
+
+      res.status(500).json({
+        error:
+          "Failed to start Google Drive account connection",
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/accounts/google/callback",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { code, state } = req.query;
+
+      const sessionId = parseSessionCookie(req);
+
+      if (!sessionId) {
+        throw new Error(
+          "Admin authentication required"
+        );
+      }
+
+      await handleDriveAccountCallback(
+        String(code || ""),
+        String(state || ""),
+        sessionId
+      );
+
+      const frontendUrl =
+        process.env.FRONTEND_URL ||
+        "http://localhost:5173";
+
+      res.redirect(
+        `${frontendUrl}/admin/accounts`
+      );
+    } catch (error) {
+      console.error(
+        "Drive account OAuth callback failed:",
+        error
+      );
+
+      const frontendUrl =
+        process.env.FRONTEND_URL ||
+        "http://localhost:5173";
+
+      res.redirect(
+        `${frontendUrl}/admin/accounts?error=${encodeURIComponent(
+          error.message ||
+            "Google account connection failed"
+        )}`
+      );
+    }
+  }
+);
+
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });

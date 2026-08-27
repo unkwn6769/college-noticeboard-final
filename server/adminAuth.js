@@ -225,34 +225,45 @@ export function parseSessionCookie(req) {
 }
 
 export function setSessionCookie(res, sessionId) {
-  const secure =
-    process.env.NODE_ENV === "production";
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.RENDER === "true";
+
+  const sameSite = isProduction
+    ? "None"
+    : "Lax";
 
   res.setHeader(
     "Set-Cookie",
     [
-      `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
+      `admin_session=${encodeURIComponent(sessionId)}`,
       "HttpOnly",
       "Path=/",
-      "SameSite=Lax",
+      `SameSite=${sameSite}`,
+      ...(isProduction ? ["Secure"] : []),
       `Max-Age=${SESSION_DAYS * 24 * 60 * 60}`,
-      ...(secure ? ["Secure"] : []),
     ].join("; ")
   );
 }
 
 export function clearSessionCookie(res) {
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.RENDER === "true";
+
+  const sameSite = isProduction
+    ? "None"
+    : "Lax";
+
   res.setHeader(
     "Set-Cookie",
     [
-      `${SESSION_COOKIE}=`,
+      "admin_session=",
       "HttpOnly",
       "Path=/",
-      "SameSite=Lax",
+      `SameSite=${sameSite}`,
+      ...(isProduction ? ["Secure"] : []),
       "Max-Age=0",
-      ...(process.env.NODE_ENV === "production"
-        ? ["Secure"]
-        : []),
     ].join("; ")
   );
 }

@@ -29,6 +29,7 @@ function AdminAccounts() {
   const [authenticated, setAuthenticated] = useState(false);
   const [accounts, setAccounts] = useState([]);
   const [error, setError] = useState("");
+  const [updatingId, setUpdatingId] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -70,6 +71,110 @@ function AdminAccounts() {
 
     load();
   }, []);
+
+  async function toggleAccount(account) {
+    const nextStatus =
+      account.status === "connected"
+        ? "disabled"
+        : "connected";
+
+    try {
+      setUpdatingId(account.id);
+
+      const response = await fetch(
+        `${API_URL}/api/admin/accounts/${encodeURIComponent(
+          account.id
+        )}/status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status: nextStatus,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+
+        throw new Error(
+          data.error || "Failed to update account"
+        );
+      }
+
+      setAccounts((current) =>
+        current.map((item) =>
+          item.id === account.id
+            ? {
+              ...item,
+              status: nextStatus,
+            }
+            : item
+        )
+      );
+    } catch (error) {
+      console.error(error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to update account"
+      );
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  async function removeAccount(account) {
+    const confirmed = window.confirm(
+      `Remove ${account.email} from the storage account pool?\n\n` +
+      "This will not delete files from Google Drive."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setUpdatingId(account.id);
+
+      const response = await fetch(
+        `${API_URL}/api/admin/accounts/${encodeURIComponent(
+          account.id
+        )}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "Failed to remove account"
+        );
+      }
+
+      setAccounts((current) =>
+        current.filter(
+          (item) => item.id !== account.id
+        )
+      );
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to remove account"
+      );
+    } finally {
+      setUpdatingId(null);
+    }
+  }
 
   if (loading) {
     return (
@@ -160,12 +265,20 @@ function AdminAccounts() {
                       </h2>
 
                       <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
-                        <CheckCircle2
-                          size={14}
-                          className="text-emerald-500"
+                        <span
+                          className={
+                            account.status === "connected"
+                              ? "h-2 w-2 rounded-full bg-emerald-500"
+                              : "h-2 w-2 rounded-full bg-slate-400"
+                          }
                         />
-                        {account.status}
+
+                        <span className="capitalize">
+                          {account.status}
+                        </span>
+
                         <span>•</span>
+
                         {account.fileCount.toLocaleString()} mapped files
                       </div>
                     </div>
@@ -183,6 +296,36 @@ function AdminAccounts() {
                       </div>
                     </div>
                   )}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleAccount(account)}
+                      disabled={updatingId === account.id}
+                      className={
+                        account.status === "connected"
+                          ? "rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          : "rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                      }
+                    >
+                      {updatingId === account.id
+                        ? "Updating..."
+                        : account.status === "connected"
+                          ? "Disable"
+                          : "Enable"}
+                    </button>
+
+                    {account.fileCount === 0 && (
+                      <button
+                        type="button"
+                        onClick={() => removeAccount(account)}
+                        disabled={updatingId === account.id}
+                        className="rounded-xl border border-red-200 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {usagePercent !== null && (

@@ -48,6 +48,8 @@ app.use(
   })
 );
 
+app.use(express.json());
+
 const PORT = Number(process.env.PORT) || 3001;
 
 const departments = [
@@ -68,6 +70,7 @@ const departments = [
   "mech-noticeboard",
 ];
 
+// "/api/admin/accounts"
 app.get(
   "/api/admin/accounts",
   requireAdmin,
@@ -177,6 +180,156 @@ app.get(
   }
 );
 
+// "/api/admin/accounts/:id/status"
+app.patch(
+  "/api/admin/accounts/:id/status",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const status = String(req.body?.status || "").trim();
+
+      if (!["connected", "disabled"].includes(status)) {
+        return res.status(400).json({
+          error: "Status must be connected or disabled",
+        });
+      }
+
+      const result = await pool.query(
+        `
+        UPDATE google_drive_accounts
+        SET
+          status = $1,
+          updated_at = NOW()
+        WHERE id = $2
+        RETURNING
+          id,
+          email,
+          status,
+          updated_at
+        `,
+        [status, id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Google Drive account not found",
+        });
+      }
+
+      res.json({
+        account: {
+          id: result.rows[0].id,
+          email: result.rows[0].email,
+          status: result.rows[0].status,
+          updatedAt: result.rows[0].updated_at,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Admin Google account status update failed:",
+        error
+      );
+
+      res.status(500).json({
+        error: "Failed to update Google Drive account status",
+      });
+    }
+  }
+);
+
+// "/api/admin/accounts/:id"
+app.delete(
+  "/api/admin/accounts/:id",
+  requireAdmin,
+  async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+      const { id } = req.params;
+
+      await client.query("BEGIN");
+
+      const accountResult = await client.query(
+        `
+        SELECT
+          id,
+          email
+        FROM google_drive_accounts
+        WHERE id = $1
+        FOR UPDATE
+        `,
+        [id]
+      );
+
+      if (accountResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(404).json({
+          error: "Google Drive account not found",
+        });
+      }
+
+      const account = accountResult.rows[0];
+
+      const mappingResult = await client.query(
+        `
+        SELECT COUNT(*)::bigint AS file_count
+        FROM google_drive_file_accounts
+        WHERE account_id = $1
+        `,
+        [id]
+      );
+
+      const fileCount = Number(
+        mappingResult.rows[0].file_count
+      );
+
+      if (fileCount > 0) {
+        await client.query("ROLLBACK");
+
+        return res.status(409).json({
+          error:
+            "Account cannot be removed because it still has mapped files",
+          fileCount,
+        });
+      }
+
+      await client.query(
+        `
+        DELETE FROM google_drive_accounts
+        WHERE id = $1
+        `,
+        [id]
+      );
+
+      await client.query("COMMIT");
+
+      res.json({
+        removed: true,
+        account: {
+          id: account.id,
+          email: account.email,
+        },
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      console.error(
+        "Admin Google account removal failed:",
+        error
+      );
+
+      res.status(500).json({
+        error: "Failed to remove Google Drive account",
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// "/api/admin/auth/google"
 app.get(
   "/api/admin/auth/google",
   (req, res) => {
@@ -198,6 +351,7 @@ app.get(
   }
 );
 
+// "/api/admin/auth/google/callback"
 app.get(
   "/api/admin/auth/google/callback",
   async (req, res) => {
@@ -244,6 +398,7 @@ app.get(
   }
 );
 
+// "/api/admin/auth/me"
 app.get(
   "/api/admin/auth/me",
   async (req, res) => {
@@ -279,6 +434,7 @@ app.get(
   }
 );
 
+// "/api/admin/auth/logout"
 app.post(
   "/api/admin/auth/logout",
   async (req, res) => {
@@ -308,7 +464,7 @@ app.post(
   }
 );
 
-
+// "/api/admin/accounts/google/start"
 app.get(
   "/api/admin/accounts/google/start",
   requireAdmin,
@@ -340,39 +496,9 @@ app.get(
       });
     }
   }
-);app.get(
-  "/api/admin/accounts/google/start",
-  requireAdmin,
-  (req, res) => {
-    try {
-      const sessionId = parseSessionCookie(req);
-
-      if (!sessionId) {
-        return res.status(401).json({
-          error: "Admin authentication required",
-        });
-      }
-
-      const url =
-        getDriveAccountAuthorizationUrl(
-          sessionId
-        );
-
-      res.redirect(url);
-    } catch (error) {
-      console.error(
-        "Drive account OAuth start failed:",
-        error
-      );
-
-      res.status(500).json({
-        error:
-          "Failed to start Google Drive account connection",
-      });
-    }
-  }
 );
 
+// "/api/admin/accounts/google/callback"
 app.get(
   "/api/admin/accounts/google/callback",
   requireAdmin,

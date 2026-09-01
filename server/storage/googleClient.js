@@ -3,6 +3,69 @@ import { findGoogleAccountForFile, updateGoogleAccessToken } from "./driveAccoun
 import crypto from "node:crypto";
 import { pool } from "../db/database.js";
 
+const DRIVE_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const driveClientCache = new Map();
+const driveClientInflight = new Map();
+
+function getAccountCacheKey(account) {
+  return account?.connected_account_id
+    ? String(account.connected_account_id)
+    : null;
+}
+
+async function invalidateGoogleAccountAuthorization(accountId, reason = null) {
+  if (!accountId) {
+    return false;
+  }
+
+  const result = await pool.query(
+    `
+    UPDATE google_drive_accounts
+    SET
+      status = 'authorization_invalid',
+      updated_at = NOW()
+    WHERE id = $1
+      AND status <> 'authorization_invalid'
+    RETURNING id
+    `,
+    [accountId]
+  );
+
+  if (result.rowCount > 0) {
+    console.warn(
+      `[GOOGLE DRIVE] Account ${accountId} marked authorization_invalid${reason ? `: ${reason}` : ""}`
+    );
+  }
+
+  return result.rowCount > 0;
+}
+
+function isAuthorizationInvalidError(error) {
+  const status = error?.response?.status ?? error?.status ?? error?.code ?? null;
+  const reason = error?.response?.data?.error?.errors?.[0]?.reason ?? error?.errors?.[0]?.reason ?? null;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = String(reason ?? error?.code ?? message ?? "").toLowerCase();
+
+  if (status === 401) {
+    return true;
+  }
+
+  if (
+    status === 403 && (
+      reason === "notAuthorized" ||
+      reason === "invalidCredentials" ||
+      reason === "invalid_grant" ||
+      normalized.includes("invalid grant") ||
+      normalized.includes("invalid credentials") ||
+      normalized.includes("not authorized") ||
+      normalized.includes("required scope")
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 function decryptText(value) {
   const key = crypto
@@ -104,47 +167,116 @@ async function createGoogleAuth(account) {
   });
 
   if (expiresAt && expiresAt < Date.now() + 60_000) {
-    const result = await auth.refreshAccessToken();
-    const credentials = result.credentials;
+    try {
+      const result = await auth.refreshAccessToken();
+      const credentials = result.credentials;
 
-    if (!credentials.access_token) {
-      throw new Error(
-        "Google token refresh returned no access token"
+      if (!credentials.access_token) {
+        throw new Error(
+          "Google token refresh returned no access token"
+        );
+      }
+
+      await updateGoogleAccessToken(
+        account.connected_account_id,
+        encryptText(credentials.access_token),
+        new Date(
+          credentials.expiry_date ?? Date.now() + 3600_000
+        )
       );
+
+      auth.setCredentials(credentials);
+    } catch (error) {
+      if (isAuthorizationInvalidError(error)) {
+        await invalidateGoogleAccountAuthorization(
+          account.connected_account_id,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      throw error;
     }
-
-    await updateGoogleAccessToken(
-      account.connected_account_id,
-      encryptText(credentials.access_token),
-      new Date(
-        credentials.expiry_date ?? Date.now() + 3600_000
-      )
-    );
-
-    auth.setCredentials(credentials);
   }
 
   return auth;
 }
 
 export async function getGoogleDriveClientForAccount(account) {
-  const auth = await createGoogleAuth(account);
+  const cacheKey = getAccountCacheKey(account);
 
-  return google.drive({
-    version: "v3",
-    auth,
-  });
+  if (!cacheKey) {
+    const auth = await createGoogleAuth(account);
+
+    return google.drive({
+      version: "v3",
+      auth,
+    });
+  }
+
+  const now = Date.now();
+  const cached = driveClientCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.drive;
+  }
+
+  const inflight = driveClientInflight.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = (async () => {
+    const auth = await createGoogleAuth(account);
+
+    const drive = google.drive({
+      version: "v3",
+      auth,
+    });
+
+    driveClientCache.set(cacheKey, {
+      drive,
+      expiresAt: Date.now() + DRIVE_CLIENT_CACHE_TTL_MS,
+    });
+
+    return drive;
+  })();
+
+  driveClientInflight.set(cacheKey, promise);
+
+  try {
+    return await promise;
+  } finally {
+    driveClientInflight.delete(cacheKey);
+  }
 }
 
 export async function getConnectedGoogleDriveAccounts() {
   const accounts = await getConnectedGoogleAccounts();
 
-  return Promise.all(
-    accounts.map(async (account) => ({
-      account,
-      drive: await getGoogleDriveClientForAccount(account),
-    }))
+  const results = await Promise.all(
+    accounts.map(async (account) => {
+      try {
+        const drive = await getGoogleDriveClientForAccount(account);
+
+        return {
+          account,
+          drive,
+        };
+      } catch (error) {
+        // A single broken/partially-authorized account must not prevent
+        // the admin account list or the healthy Drive accounts from loading.
+        // Callers can still inspect the DB row and later reconnect/remove
+        // the unhealthy account.
+        console.error(
+          `[GOOGLE DRIVE] Skipping account ${account.email ?? account.connected_account_id}:`,
+          error instanceof Error ? error.message : error
+        );
+
+        return null;
+      }
+    })
   );
+
+  return results.filter(Boolean);
 }
 
 export async function getGoogleDriveClient(fileId) {

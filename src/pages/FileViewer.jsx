@@ -201,13 +201,21 @@ function FileViewer() {
             </div>
           </Link>
 
-          <Link
-            to={backUrl}
-            className="flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-slate-900"
-          >
-            <ArrowLeft size={16} />
-            Back
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/admin"
+              className="text-sm font-semibold text-slate-500 transition hover:text-slate-900"
+            >
+              Admin
+            </Link>
+            <Link
+              to={backUrl}
+              className="flex items-center gap-2 text-sm font-medium text-slate-500 transition hover:text-slate-900"
+            >
+              <ArrowLeft size={16} />
+              Back
+            </Link>
+          </div>
 
         </div>
       </header>

@@ -7,7 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "npm --prefix server install",
+    "server:dev": "npm --prefix server run dev",
+    "server:start": "npm --prefix server start",
+    "test": "npm --prefix server test",
+    "dev:all": "bash scripts/dev-all.sh"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -16,7 +21,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

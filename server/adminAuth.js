@@ -126,9 +126,10 @@ export async function handleGoogleCallback(code, state) {
 
   const adminResult = await pool.query(
     `
-    SELECT id, email
+    SELECT id, email, role, status
     FROM admin_users
     WHERE LOWER(email) = $1
+      AND status = 'active'
     LIMIT 1
     `,
     [email]
@@ -178,6 +179,8 @@ export async function getAdminFromSession(
     SELECT
       u.id,
       u.email,
+      u.role,
+      u.status,
       s.id AS session_id,
       s.expires_at
     FROM admin_sessions s
@@ -185,6 +188,7 @@ export async function getAdminFromSession(
       ON u.id = s.admin_user_id
     WHERE s.id = $1
       AND s.expires_at > NOW()
+      AND u.status = 'active'
     LIMIT 1
     `,
     [sessionId]
@@ -287,6 +291,33 @@ export async function requireAdmin(req, res, next) {
 
     res.status(500).json({
       error: "Failed to authenticate admin",
+    });
+  }
+}
+
+export async function requireOwner(req, res, next) {
+  try {
+    const sessionId = parseSessionCookie(req);
+    const admin = await getAdminFromSession(sessionId);
+
+    if (!admin) {
+      return res.status(401).json({
+        error: 'Admin authentication required',
+      });
+    }
+
+    if (admin.role !== 'owner') {
+      return res.status(403).json({
+        error: 'Owner permission required',
+      });
+    }
+
+    req.admin = admin;
+    next();
+  } catch (error) {
+    console.error('Owner authentication failed:', error);
+    return res.status(500).json({
+      error: 'Failed to authenticate owner',
     });
   }
 }

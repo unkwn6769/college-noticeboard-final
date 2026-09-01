@@ -3,10 +3,11 @@ dist/
 
 .env
 .env.*
+!.env.example
 
 *.log
-
 *.dump
 
 verification-results.jsonl
-failed-source-verification.json.DS_Store
+failed-source-verification.json
+.DS_Store

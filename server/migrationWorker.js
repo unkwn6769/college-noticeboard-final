@@ -61,8 +61,8 @@ function assertFencedUpdate(result, itemId) {
 
 const transientRetryCounts = new Map();
 
-const TARGET_ACCOUNTS_CACHE_TTL_MS = 5_000;
-const QUOTA_CACHE_TTL_MS = 1_000;
+const TARGET_ACCOUNTS_CACHE_TTL_MS = 15_000;
+const QUOTA_CACHE_TTL_MS = 10_000;
 
 let targetAccountsCache = {
   expiresAt: 0,
@@ -2091,7 +2091,7 @@ export async function retryFailedSourceDeletion(
   };
 }
 
-const PROGRESS_WRITE_INTERVAL_MS = 1000;
+const PROGRESS_WRITE_INTERVAL_MS = 2500;
 
 /*
  * Progress is written at a bounded rate so a large file does not
@@ -2227,6 +2227,9 @@ export function createTrackedUploadStream(
   }
 
   tracker = new Transform({
+    readableHighWaterMark: 1024 * 1024,
+    writableHighWaterMark: 1024 * 1024,
+
     transform(chunk, encoding, callback) {
       if (fenceError) {
         callback(fenceError);

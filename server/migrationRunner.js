@@ -7,7 +7,30 @@ import {
 
 const DEFAULT_BATCH_SIZE = 25;
 const MAX_BATCH_SIZE = 25;
-const MAX_FILE_WORKERS_PER_MIGRATION = 25;
+const DEFAULT_FILE_WORKERS_PER_MIGRATION = 40;
+const MAX_FILE_WORKERS_PER_MIGRATION = 50;
+
+function getConfiguredFileWorkers() {
+  const raw = process.env.MIGRATION_FILE_WORKERS;
+
+  if (raw == null || raw === "") {
+    return DEFAULT_FILE_WORKERS_PER_MIGRATION;
+  }
+
+  const value = Number(raw);
+
+  if (
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_FILE_WORKERS_PER_MIGRATION
+  ) {
+    throw new Error(
+      `MIGRATION_FILE_WORKERS must be an integer between 1 and ${MAX_FILE_WORKERS_PER_MIGRATION}`
+    );
+  }
+
+  return value;
+}
 const MAX_RESULT_SAMPLES = 100;
 const DEFERRED_STORAGE_BACKOFF_MS = 250;
 
@@ -135,10 +158,7 @@ export async function runMigrationBatch(
     };
   }
 
-  const workerCount = Math.min(
-    batchSize,
-    MAX_FILE_WORKERS_PER_MIGRATION
-  );
+  const workerCount = getConfiguredFileWorkers();
 
   const sharedState = {
     processed: 0,

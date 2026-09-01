@@ -5,7 +5,7 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node preflight.js && node --env-file=../.env server.js",
+    "start": "node preflight.js && node server.js",
     "dev": "nodemon --exec \"node preflight.js && node --env-file=../.env server.js\"",
     "preflight": "node preflight.js",
     "test": "node --env-file=../.env --test migrationWorker.fencing.test.js fix67Safety.test.js activityLog.test.js storage/storageQuota.test.js storage/storageFileTypes.test.js storage/storageHealth.test.js recycleBin.test.js driveFileSearch.test.js"

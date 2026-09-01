@@ -33,6 +33,7 @@ import { getStorageFileTypeSummary } from "./storage/storageFileTypes.js";
 import { getStorageHealth } from "./storage/storageHealth.js";
 import { listRecycleBin, restoreRecycleBinFile, permanentlyDeleteRecycleBinFile } from "./recycleBin.js";
 import { getSourceRetentionVisibility, normalizeSourceRetentionFilters } from "./sourceRetention.js";
+import { runNetworkDiagnostic } from "./networkDiagnostic.js";
 import { getFileTypeExtensions } from "./storage/storageFileTypesMath.js";
 import {
   buildDriveFileSearchWhere,
@@ -77,6 +78,24 @@ app.use(
 );
 
 app.use(express.json());
+
+app.get(
+  "/api/admin/network-diagnostic",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      return res.json(await runNetworkDiagnostic());
+    } catch (error) {
+      console.error("Admin network diagnostic failed:", error);
+      return res.status(502).json({
+        error: "Network diagnostic failed",
+      });
+    }
+  }
+);
+
+
 
 const PORT = Number(process.env.PORT) || 3001;
 

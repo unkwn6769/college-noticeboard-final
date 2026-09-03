@@ -1601,8 +1601,8 @@ function AdminAccounts() {
 
       {migrationModalOpen &&
         migrationSource && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-6">
-            <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-4 sm:p-6">
+            <div className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">

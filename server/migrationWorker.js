@@ -1087,7 +1087,11 @@ export async function claimNextItem(migrationId) {
         finished_at = NULL,
         bytes_transferred = CASE WHEN target_file_id IS NOT NULL THEN bytes_transferred ELSE 0 END,
         speed_bytes_per_second = 0,
-        transfer_phase = CASE WHEN target_file_id IS NOT NULL THEN 'verifying' ELSE 'downloading' END,
+        transfer_phase = CASE
+          WHEN target_file_id IS NOT NULL THEN 'verifying'
+          WHEN status = 'reconciling' THEN 'reconciling'
+          ELSE 'downloading'
+        END,
         reconciliation_deadline = CASE WHEN status = 'reconciling' THEN reconciliation_deadline ELSE NULL END,
         updated_at = NOW(),
         error_message = NULL
@@ -1567,7 +1571,7 @@ export async function markItemReconciling(
       reconciliation_deadline = NOW() + ($1 * INTERVAL '1 millisecond'),
       error_message = $2,
       transfer_phase = 'reconciling',
-      next_retry_at = NULL,
+      next_retry_at = NOW() + INTERVAL '30 seconds',
       updated_at = NOW()
     WHERE id = $3 AND lease_generation = $4
     `,

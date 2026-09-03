@@ -2290,6 +2290,13 @@ export function createTrackedUploadStream(
     tracker.destroy(error);
   });
 
+  tracker.transferStartedAt = Date.now();
+  tracker.sourceStreamEndedAt = null;
+
+  sourceStream.once("end", () => {
+    tracker.sourceStreamEndedAt = Date.now();
+  });
+
   sourceStream.pipe(tracker);
 
   tracker.getFenceError = () => fenceError;
@@ -2328,6 +2335,13 @@ export function createTrackedUploadStream(
       speedBytesPerSecond: speed,
       etaSeconds: eta,
       elapsedSeconds,
+      transferElapsedMs:
+        Date.now() - tracker.transferStartedAt,
+      sourceStreamElapsedMs:
+        tracker.sourceStreamEndedAt == null
+          ? null
+          : tracker.sourceStreamEndedAt -
+            tracker.transferStartedAt,
     };
   };
 
@@ -2967,6 +2981,8 @@ export async function migrateOneItem(
             }
           );
 
+        const uploadStartedAt = Date.now();
+
         try {
           uploadResponse =
             await targetDrive.files.create({
@@ -2991,6 +3007,14 @@ export async function migrateOneItem(
             }, {
               signal: abortController.signal,
             });
+
+          const uploadElapsedMs =
+            Date.now() - uploadStartedAt;
+
+          log(
+            `Upload completed for ${sourceMetadata.name} ` +
+            `in ${uploadElapsedMs}ms`
+          );
         } catch (error) {
           if (isFencedWorkerError(error) || isAbortError(error)) {
             throw error;
@@ -3014,7 +3038,19 @@ export async function migrateOneItem(
           };
         }
 
-        await trackedUploadStream.getProgressState();
+        const transferState =
+          await trackedUploadStream.getProgressState();
+
+        const sourceElapsedMs =
+          transferState.sourceStreamElapsedMs;
+
+        log(
+          `Transfer timing for ${sourceMetadata.name}: ` +
+          `${transferState.bytesTransferred} bytes, ` +
+          `source=${sourceElapsedMs == null ? "n/a" : `${(sourceElapsedMs / 1000).toFixed(2)}s`}, ` +
+          `total=${(transferState.transferElapsedMs / 1000).toFixed(2)}s, ` +
+          `rate=${(transferState.speedBytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`
+        );
 
         targetFileId =
           uploadResponse?.data?.id ?? null;

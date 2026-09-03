@@ -498,13 +498,32 @@ export async function startMigrationScheduler() {
    * Recover interrupted work before starting
    * the normal scheduler loop.
    */
-  const acquired = await acquireSchedulerLease();
+  let acquired = false;
+
+  /*
+   * Render deployments can briefly overlap old and new instances.
+   * Do not permanently abandon scheduling when another instance
+   * currently owns the lease. Wait and retry until the old lease
+   * is released or expires.
+   */
+  while (!schedulerStopRequested) {
+    acquired = await acquireSchedulerLease();
+
+    if (acquired) {
+      break;
+    }
+
+    console.log(
+      `[MIGRATION SCHEDULER] Lease is currently held; retrying in ${
+        SCHEDULER_HEARTBEAT_MS / 1000
+      }s`
+    );
+
+    await sleep(SCHEDULER_HEARTBEAT_MS);
+  }
 
   if (!acquired) {
     schedulerRunning = false;
-    console.log(
-      "[MIGRATION SCHEDULER] Another scheduler instance is active; this instance will not process migrations"
-    );
     return;
   }
 

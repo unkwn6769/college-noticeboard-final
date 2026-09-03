@@ -2251,7 +2251,11 @@ export function createTrackedUploadStream(
         return;
       }
 
-      queueProgressWrite(true, "uploading");
+      /*
+       * Do not force a final PostgreSQL progress write here.
+       * The caller immediately advances the item to the next
+       * fenced transfer phase after the upload completes.
+       */
       callback();
     },
   });
@@ -2291,7 +2295,10 @@ export function createTrackedUploadStream(
   tracker.getFenceError = () => fenceError;
 
   tracker.getProgressState = async () => {
-    queueProgressWrite(true, "uploading");
+    /*
+     * Wait for progress writes already queued during the transfer,
+     * but do not enqueue another redundant final UPDATE.
+     */
     await writeChain;
 
     if (fenceError) {

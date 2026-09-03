@@ -1425,28 +1425,164 @@ app.post(
       const requestedLimit =
         req.body?.limit;
 
-      let migrationLimit = null;
-
-      if (
-        requestedLimit !== undefined &&
+      const selectionMode =
+        String(req.body?.selectionMode || "")
+          .trim()
+          .toLowerCase() ||
+        (requestedLimit !== undefined &&
         requestedLimit !== null &&
         requestedLimit !== ""
-      ) {
-        const parsedLimit =
-          Number(requestedLimit);
+          ? "count"
+          : "all");
 
+      if (
+        !["all", "count", "size"].includes(
+          selectionMode
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Invalid migration selection mode",
+        });
+      }
+
+      let migrationLimit = null;
+      let sizeSelection = null;
+
+      if (
+        selectionMode === "count" ||
+        selectionMode === "all"
+      ) {
         if (
-          !Number.isInteger(parsedLimit) ||
-          parsedLimit < 1 ||
-          parsedLimit > 100000
+          requestedLimit !== undefined &&
+          requestedLimit !== null &&
+          requestedLimit !== ""
         ) {
+          const parsedLimit =
+            Number(requestedLimit);
+
+          if (
+            !Number.isInteger(parsedLimit) ||
+            parsedLimit < 1 ||
+            parsedLimit > 100000
+          ) {
+            return res.status(400).json({
+              error:
+                "Migration limit must be an integer between 1 and 100000",
+            });
+          }
+
+          migrationLimit = parsedLimit;
+        }
+      }
+
+      if (selectionMode === "size") {
+        const parseBigIntField = (
+          value,
+          fieldName
+        ) => {
+          try {
+            if (
+              value === undefined ||
+              value === null ||
+              value === ""
+            ) {
+              throw new Error(
+                `${fieldName} is required`
+              );
+            }
+
+            return BigInt(String(value));
+          } catch {
+            throw new Error(
+              `${fieldName} must be a valid integer`
+            );
+          }
+        };
+
+        let targetSizeBytes;
+        let minimumFileSizeBytes;
+        let maximumFileSizeBytes;
+        let maxFileCount;
+
+        try {
+          targetSizeBytes =
+            parseBigIntField(
+              req.body?.targetSizeBytes,
+              "targetSizeBytes"
+            );
+
+          minimumFileSizeBytes =
+            parseBigIntField(
+              req.body?.minimumFileSizeBytes,
+              "minimumFileSizeBytes"
+            );
+
+          maximumFileSizeBytes =
+            parseBigIntField(
+              req.body?.maximumFileSizeBytes,
+              "maximumFileSizeBytes"
+            );
+
+          maxFileCount =
+            Number(req.body?.maxFileCount);
+        } catch (error) {
           return res.status(400).json({
             error:
-              "Migration limit must be an integer between 1 and 100000",
+              error instanceof Error
+                ? error.message
+                : "Invalid size-based migration selection",
           });
         }
 
-        migrationLimit = parsedLimit;
+        if (targetSizeBytes <= 0n) {
+          return res.status(400).json({
+            error:
+              "Target migration size must be greater than 0 bytes",
+          });
+        }
+
+        if (minimumFileSizeBytes < 0n) {
+          return res.status(400).json({
+            error:
+              "Minimum file size cannot be negative",
+          });
+        }
+
+        if (maximumFileSizeBytes <= 0n) {
+          return res.status(400).json({
+            error:
+              "Maximum file size must be greater than 0 bytes",
+          });
+        }
+
+        if (
+          maximumFileSizeBytes <
+          minimumFileSizeBytes
+        ) {
+          return res.status(400).json({
+            error:
+              "Maximum file size must be at least the minimum file size",
+          });
+        }
+
+        if (
+          !Number.isInteger(maxFileCount) ||
+          maxFileCount < 1 ||
+          maxFileCount > 100000
+        ) {
+          return res.status(400).json({
+            error:
+              "Maximum file count must be an integer between 1 and 100000",
+          });
+        }
+
+        sizeSelection = {
+          targetSizeBytes,
+          minimumFileSizeBytes,
+          maximumFileSizeBytes,
+          maxFileCount,
+        };
       }
 
       if (!targetAccountId) {
@@ -1611,13 +1747,104 @@ app.post(
         });
       }
 
-      const totalFiles =
-        migrationLimit === null
-          ? availableFiles
-          : Math.min(
-            migrationLimit,
-            availableFiles
+      let totalFiles;
+      let selectedFileIds = null;
+      let selectedBytes = null;
+
+      if (sizeSelection) {
+        /*
+         * Size-based benchmark selection:
+         *
+         * 1. Only actual available files.
+         * 2. Ignore unknown/small files below the threshold.
+         * 3. Consider largest files first.
+         * 4. Stop once the requested size is reached.
+         * 5. Never select more than maxFileCount.
+         *
+         * We intentionally do the accumulation in Node using
+         * BigInt so large byte totals remain exact.
+         */
+        const candidatesResult =
+          await client.query(
+            `
+            SELECT
+              f.file_id,
+              COALESCE(r.size, 0)::bigint AS size_bytes
+            FROM google_drive_file_accounts f
+            JOIN resources r
+              ON r.storage_key = f.file_id
+            WHERE f.account_id = $1
+              AND r.type = 'file'
+              AND r.is_available = TRUE
+              AND COALESCE(r.size, 0)::bigint >= $2
+              AND COALESCE(r.size, 0)::bigint <= $3
+            ORDER BY
+              COALESCE(r.size, 0)::bigint DESC,
+              f.file_id
+            LIMIT $4
+            `,
+            [
+              sourceAccountId,
+              sizeSelection.minimumFileSizeBytes.toString(),
+              sizeSelection.maximumFileSizeBytes.toString(),
+              sizeSelection.maxFileCount,
+            ]
           );
+
+        selectedFileIds = [];
+        selectedBytes = 0n;
+
+        for (
+          const row of candidatesResult.rows
+        ) {
+          selectedFileIds.push(row.file_id);
+
+          selectedBytes += BigInt(
+            row.size_bytes || 0
+          );
+
+          if (
+            selectedBytes >=
+            sizeSelection.targetSizeBytes
+          ) {
+            break;
+          }
+        }
+
+        if (selectedFileIds.length === 0) {
+          await client.query("ROLLBACK");
+
+          return res.status(409).json({
+            error:
+              "No available files match the requested minimum file size",
+          });
+        }
+
+        totalFiles =
+          selectedFileIds.length;
+
+        /*
+         * file_limit is intentionally non-null for a
+         * size-limited migration so the source account
+         * cannot be removed before this limited migration
+         * is fully completed.
+         */
+        migrationLimit = totalFiles;
+
+        /*
+         * The target may not be reachable within the
+         * maximum file count. That is allowed; the UI
+         * requested a maximum, not an exact byte count.
+         */
+      } else {
+        totalFiles =
+          migrationLimit === null
+            ? availableFiles
+            : Math.min(
+              migrationLimit,
+              availableFiles
+            );
+      }
 
       const migrationId =
         crypto.randomUUID();
@@ -1669,37 +1896,85 @@ app.post(
        * Populate the actual migration items
        * in the SAME transaction.
        */
-      const insertItemsResult =
-        await client.query(
-          `
-          INSERT INTO google_drive_account_migration_items (
-  id,
-  migration_id,
-  source_file_id,
-  status,
-  size_bytes
-)
-SELECT
-  gen_random_uuid()::text,
-  $1,
-  f.file_id,
-  'pending',
-  COALESCE(r.size, 0)
-          FROM google_drive_file_accounts f
-          JOIN resources r
-            ON r.storage_key = f.file_id
-          WHERE f.account_id = $2
-            AND r.type = 'file'
-            AND r.is_available = TRUE
-          ORDER BY f.file_id
-          LIMIT $3
-          `,
-          [
-            migrationId,
-            sourceAccountId,
-            totalFiles,
-          ]
-        );
+      let insertItemsResult;
+
+      if (selectedFileIds) {
+        /*
+         * Re-select exactly the files chosen above.
+         * Dynamic placeholders keep this independent of
+         * the underlying file_id PostgreSQL type.
+         */
+        const filePlaceholders =
+          selectedFileIds
+            .map(
+              (_, index) =>
+                `$${index + 3}`
+            )
+            .join(", ");
+
+        insertItemsResult =
+          await client.query(
+            `
+            INSERT INTO google_drive_account_migration_items (
+              id,
+              migration_id,
+              source_file_id,
+              status,
+              size_bytes
+            )
+            SELECT
+              gen_random_uuid()::text,
+              $1,
+              f.file_id,
+              'pending',
+              COALESCE(r.size, 0)
+            FROM google_drive_file_accounts f
+            JOIN resources r
+              ON r.storage_key = f.file_id
+            WHERE f.account_id = $2
+              AND r.type = 'file'
+              AND r.is_available = TRUE
+              AND f.file_id IN (${filePlaceholders})
+            `,
+            [
+              migrationId,
+              sourceAccountId,
+              ...selectedFileIds,
+            ]
+          );
+      } else {
+        insertItemsResult =
+          await client.query(
+            `
+            INSERT INTO google_drive_account_migration_items (
+              id,
+              migration_id,
+              source_file_id,
+              status,
+              size_bytes
+            )
+            SELECT
+              gen_random_uuid()::text,
+              $1,
+              f.file_id,
+              'pending',
+              COALESCE(r.size, 0)
+            FROM google_drive_file_accounts f
+            JOIN resources r
+              ON r.storage_key = f.file_id
+            WHERE f.account_id = $2
+              AND r.type = 'file'
+              AND r.is_available = TRUE
+            ORDER BY f.file_id
+            LIMIT $3
+            `,
+            [
+              migrationId,
+              sourceAccountId,
+              totalFiles,
+            ]
+          );
+      }
 
       if (
         insertItemsResult.rowCount !==
@@ -1726,6 +2001,23 @@ SELECT
           targetEmail: target.email,
           totalFiles,
           fileLimit: migrationLimit,
+          selectionMode,
+          targetSizeBytes:
+            sizeSelection
+              ? sizeSelection.targetSizeBytes.toString()
+              : null,
+          minimumFileSizeBytes:
+            sizeSelection
+              ? sizeSelection.minimumFileSizeBytes.toString()
+              : null,
+          maximumFileSizeBytes:
+            sizeSelection
+              ? sizeSelection.maximumFileSizeBytes.toString()
+              : null,
+          selectedBytes:
+            selectedBytes === null
+              ? null
+              : selectedBytes.toString(),
         },
       });
 

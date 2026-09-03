@@ -128,6 +128,18 @@ function AdminAccounts() {
   const [customMigrationLimit, setCustomMigrationLimit] =
     useState("");
 
+  const [migrationTargetSizeMb, setMigrationTargetSizeMb] =
+    useState("500");
+
+  const [migrationMinimumFileSizeMb, setMigrationMinimumFileSizeMb] =
+    useState("5");
+
+  const [migrationMaximumFileSizeMb, setMigrationMaximumFileSizeMb] =
+    useState("20");
+
+  const [migrationMaximumFiles, setMigrationMaximumFiles] =
+    useState("100");
+
   const [migrationModalOpen, setMigrationModalOpen] =
     useState(false);
 
@@ -716,6 +728,7 @@ function AdminAccounts() {
     }
 
     let migrationLimit;
+    let sizeSelection = null;
 
     if (migrationMode === "custom") {
       const parsedLimit =
@@ -744,6 +757,92 @@ function AdminAccounts() {
       migrationLimit = parsedLimit;
     }
 
+    if (migrationMode === "size") {
+      const targetSizeMb =
+        Number(migrationTargetSizeMb);
+
+      const minimumFileSizeMb =
+        Number(migrationMinimumFileSizeMb);
+
+      const maximumFileSizeMb =
+        Number(migrationMaximumFileSizeMb);
+
+      const maximumFiles =
+        Number(migrationMaximumFiles);
+
+      if (
+        !Number.isFinite(targetSizeMb) ||
+        targetSizeMb <= 0
+      ) {
+        setMigrationError(
+          "Enter a valid target size greater than 0 MB."
+        );
+        return;
+      }
+
+      if (
+        !Number.isFinite(minimumFileSizeMb) ||
+        minimumFileSizeMb < 0
+      ) {
+        setMigrationError(
+          "Enter a valid minimum file size of 0 MB or more."
+        );
+        return;
+      }
+
+      if (
+        !Number.isFinite(maximumFileSizeMb) ||
+        maximumFileSizeMb <= 0
+      ) {
+        setMigrationError(
+          "Enter a valid maximum file size greater than 0 MB."
+        );
+        return;
+      }
+
+      if (
+        maximumFileSizeMb < minimumFileSizeMb
+      ) {
+        setMigrationError(
+          "Maximum file size must be at least the minimum file size."
+        );
+        return;
+      }
+
+      if (
+        !Number.isInteger(maximumFiles) ||
+        maximumFiles < 1
+      ) {
+        setMigrationError(
+          "Enter a valid maximum file count of at least 1."
+        );
+        return;
+      }
+
+      if (
+        maximumFiles >
+        migrationSource.fileCount
+      ) {
+        setMigrationError(
+          `You can select at most ${migrationSource.fileCount.toLocaleString()} files.`
+        );
+        return;
+      }
+
+      sizeSelection = {
+        targetSizeBytes: Math.round(
+          targetSizeMb * 1024 * 1024
+        ),
+        minimumFileSizeBytes: Math.round(
+          minimumFileSizeMb * 1024 * 1024
+        ),
+        maximumFileSizeBytes: Math.round(
+          maximumFileSizeMb * 1024 * 1024
+        ),
+        maxFileCount: maximumFiles,
+      };
+    }
+
     setMigrationError("");
     setError("");
     setMigrationStarting(true);
@@ -762,10 +861,19 @@ function AdminAccounts() {
           },
           body: JSON.stringify({
             targetAccountId: target.id,
+            selectionMode:
+              migrationMode === "size"
+                ? "size"
+                : migrationMode === "custom"
+                  ? "count"
+                  : "all",
             ...(migrationMode === "custom"
               ? {
                 limit: migrationLimit,
               }
+              : {}),
+            ...(migrationMode === "size"
+              ? sizeSelection
               : {}),
           }),
         }
@@ -819,6 +927,10 @@ function AdminAccounts() {
       setSelectedTargetId("");
       setMigrationMode("all");
       setCustomMigrationLimit("");
+      setMigrationTargetSizeMb("500");
+      setMigrationMinimumFileSizeMb("5");
+      setMigrationMaximumFileSizeMb("20");
+      setMigrationMaximumFiles("100");
 
       void pollMigration(
         initialMigration.id
@@ -1670,6 +1782,157 @@ function AdminAccounts() {
                       )}
                     </div>
                   </label>
+
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 hover:bg-slate-50">
+                    <input
+                      type="radio"
+                      name="migration-mode"
+                      value="size"
+                      checked={migrationMode === "size"}
+                      onChange={() =>
+                        setMigrationMode("size")
+                      }
+                      disabled={
+                        migrationStarting ||
+                        migration?.status === "pending" ||
+                        migration?.status === "running" ||
+                        migration?.status ===
+                          "waiting_for_storage"
+                      }
+                      className="mt-1"
+                    />
+
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Total size
+                      </div>
+
+                      <div className="mt-1 text-xs text-slate-500">
+                        Select larger files until the requested total size is reached.
+                      </div>
+
+                      {migrationMode === "size" && (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <label className="text-xs font-medium text-slate-600">
+                              Target size (MB)
+                            </label>
+
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={migrationTargetSizeMb}
+                              onChange={(event) =>
+                                setMigrationTargetSizeMb(
+                                  event.target.value
+                                )
+                              }
+                              disabled={
+                                migrationStarting ||
+                                migration?.status === "pending" ||
+                                migration?.status === "running" ||
+                                migration?.status ===
+                                  "waiting_for_storage"
+                              }
+                              placeholder="e.g. 500"
+                              className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none focus:border-slate-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-medium text-slate-600">
+                              Minimum file size (MB)
+                            </label>
+
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={migrationMinimumFileSizeMb}
+                              onChange={(event) =>
+                                setMigrationMinimumFileSizeMb(
+                                  event.target.value
+                                )
+                              }
+                              disabled={
+                                migrationStarting ||
+                                migration?.status === "pending" ||
+                                migration?.status === "running" ||
+                                migration?.status ===
+                                  "waiting_for_storage"
+                              }
+                              placeholder="e.g. 5"
+                              className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none focus:border-slate-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-medium text-slate-600">
+                              Maximum file size (MB)
+                            </label>
+
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={migrationMaximumFileSizeMb}
+                              onChange={(event) =>
+                                setMigrationMaximumFileSizeMb(
+                                  event.target.value
+                                )
+                              }
+                              disabled={
+                                migrationStarting ||
+                                migration?.status === "pending" ||
+                                migration?.status === "running" ||
+                                migration?.status ===
+                                  "waiting_for_storage"
+                              }
+                              placeholder="e.g. 20"
+                              className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none focus:border-slate-400"
+                            />
+
+                            <div className="mt-1 text-xs text-slate-400">
+                              Files larger than this are excluded.
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-xs font-medium text-slate-600">
+                              Maximum files
+                            </label>
+
+                            <input
+                              type="number"
+                              min="1"
+                              max={migrationSource.fileCount}
+                              step="1"
+                              value={migrationMaximumFiles}
+                              onChange={(event) =>
+                                setMigrationMaximumFiles(
+                                  event.target.value
+                                )
+                              }
+                              disabled={
+                                migrationStarting ||
+                                migration?.status === "pending" ||
+                                migration?.status === "running" ||
+                                migration?.status ===
+                                  "waiting_for_storage"
+                              }
+                              placeholder="e.g. 100"
+                              className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none focus:border-slate-400"
+                            />
+
+                            <div className="mt-1 text-xs text-slate-400">
+                              Stops at the file limit even if the target size has not been reached.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </label>
                 </div>
               </div>
 
@@ -1712,7 +1975,11 @@ function AdminAccounts() {
                     migration?.status ===
                     "waiting_for_storage" ||
                     (migrationMode === "custom" &&
-                      !customMigrationLimit)
+                      !customMigrationLimit) ||
+                    (migrationMode === "size" &&
+                      (!migrationTargetSizeMb ||
+                        !migrationMinimumFileSizeMb ||
+                        !migrationMaximumFiles))
                   }
                   className="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                 >

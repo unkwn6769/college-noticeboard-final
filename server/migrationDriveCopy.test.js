@@ -5,8 +5,9 @@ import { tryServerSideDriveCopy } from "./migrationDriveCopy.js";
 
 function makeContext(overrides = {}) {
   const calls = {
-    get: [],
     copy: [],
+    permissionCreate: [],
+    permissionDelete: [],
     reconcile: [],
     logs: [],
     heartbeats: 0,
@@ -14,10 +15,6 @@ function makeContext(overrides = {}) {
 
   const targetDrive = {
     files: {
-      async get(...args) {
-        calls.get.push(args);
-        return { data: { capabilities: { canCopy: true } } };
-      },
       async copy(...args) {
         calls.copy.push(args);
         return {
@@ -25,28 +22,55 @@ function makeContext(overrides = {}) {
             id: "target-456",
             name: "sample.xlsx",
             size: "1234",
-            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             md5Checksum: "abc123",
-            appProperties: { college_noticeboard_migration_item: "item-1" },
-            owners: [{ emailAddress: "target@example.com" }],
-            parents: ["root"],
+            appProperties: {
+              college_noticeboard_migration_item: "item-1",
+            },
           },
         };
       },
     },
   };
 
+  const sourceDrive = {
+    permissions: {
+      async create(...args) {
+        calls.permissionCreate.push(args);
+        return {
+          data: {
+            id: "perm-123",
+            type: "user",
+            role: "reader",
+            emailAddress: "target@example.com",
+          },
+        };
+      },
+      async delete(...args) {
+        calls.permissionDelete.push(args);
+      },
+    },
+  };
+
   return {
     context: {
+      sourceDrive,
       targetDrive,
       targetAccount: { email: "target@example.com" },
-      item: { id: "item-1", source_file_id: "source-123", lease_generation: 7 },
+      item: {
+        id: "item-1",
+        source_file_id: "source-123",
+        lease_generation: 7,
+      },
       sourceMetadata: {
         id: "source-123",
         name: "sample.xlsx",
         size: "1234",
-        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         md5Checksum: "abc123",
+        copyRequiresWriterPermission: false,
       },
       abortController: new AbortController(),
       ensureHeartbeatStillValid() {
@@ -57,6 +81,7 @@ function makeContext(overrides = {}) {
         calls.logs.push(message);
       },
       enabled: true,
+      shareThresholdBytes: 1024,
       markItemReconcilingFn(...args) {
         calls.reconcile.push(args);
       },
@@ -73,8 +98,9 @@ test("successful server-side copy", async () => {
 
   assert.equal(result.kind, "copied");
   assert.equal(result.targetFileId, "target-456");
-  assert.equal(calls.get.length, 1);
   assert.equal(calls.copy.length, 1);
+  assert.equal(calls.permissionCreate.length, 0);
+  assert.equal(calls.permissionDelete.length, 0);
   assert.equal(calls.reconcile.length, 0);
 
   const [request] = calls.copy[0];
@@ -86,24 +112,51 @@ test("successful server-side copy", async () => {
   );
 });
 
-test("canCopy=false falls back without copying", async () => {
+test("large 404 temporarily shares source and then copies in Google", async () => {
   const { context, calls } = makeContext();
-  context.targetDrive.files.get = async (...args) => {
-    calls.get.push(args);
-    return { data: { capabilities: { canCopy: false } } };
+  let first = true;
+
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    if (first) {
+      first = false;
+      const error = new Error("not found");
+      error.response = { status: 404 };
+      throw error;
+    }
+    return {
+      data: {
+        id: "target-789",
+        name: "sample.xlsx",
+        size: "2000000",
+        mimeType: "application/octet-stream",
+        md5Checksum: "abc123",
+      },
+    };
   };
+
+  context.sourceMetadata.size = "2000000";
 
   const result = await tryServerSideDriveCopy(context);
 
-  assert.equal(result.kind, "fallback");
-  assert.equal(calls.copy.length, 0);
-  assert.equal(calls.reconcile.length, 0);
+  assert.equal(result.kind, "copied");
+  assert.equal(result.targetFileId, "target-789");
+  assert.equal(calls.copy.length, 2);
+  assert.equal(calls.permissionCreate.length, 1);
+  assert.equal(calls.permissionDelete.length, 1);
+  assert.equal(calls.permissionCreate[0][0].fileId, "source-123");
+  assert.equal(
+    calls.permissionCreate[0][0].requestBody.emailAddress,
+    "target@example.com",
+  );
+  assert.equal(calls.permissionCreate[0][0].requestBody.role, "reader");
+  assert.equal(calls.permissionDelete[0][0].permissionId, "perm-123");
 });
 
-test("capability 403 falls back", async () => {
+test("403 falls back without a second copy", async () => {
   const { context, calls } = makeContext();
-  context.targetDrive.files.get = async (...args) => {
-    calls.get.push(args);
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
     const error = new Error("forbidden");
     error.response = { status: 403 };
     throw error;
@@ -112,7 +165,102 @@ test("capability 403 falls back", async () => {
   const result = await tryServerSideDriveCopy(context);
 
   assert.equal(result.kind, "fallback");
-  assert.equal(calls.copy.length, 0);
+  assert.equal(calls.copy.length, 1);
+  assert.equal(calls.permissionCreate.length, 0);
+});
+
+test("small 404 falls back without permission churn", async () => {
+  const { context, calls } = makeContext();
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    const error = new Error("not found");
+    error.response = { status: 404 };
+    throw error;
+  };
+
+  context.sourceMetadata.size = "512";
+
+  const result = await tryServerSideDriveCopy(context);
+
+  assert.equal(result.kind, "fallback");
+  assert.equal(calls.copy.length, 1);
+  assert.equal(calls.permissionCreate.length, 0);
+  assert.equal(calls.permissionDelete.length, 0);
+});
+
+test("share succeeds but copy remains 404, then falls back and cleans permission", async () => {
+  const { context, calls } = makeContext();
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    const error = new Error("not found");
+    error.response = { status: 404 };
+    throw error;
+  };
+  context.sourceMetadata.size = "2000000";
+
+  const result = await tryServerSideDriveCopy(context);
+
+  assert.equal(result.kind, "fallback");
+  assert.equal(calls.permissionCreate.length, 1);
+  assert.equal(calls.permissionDelete.length, 1);
+  assert.equal(calls.copy.length, 6);
+});
+
+test("copy restriction uses temporary writer access after 404", async () => {
+  const { context, calls } = makeContext();
+  context.sourceMetadata.size = "2000000";
+  context.sourceMetadata.copyRequiresWriterPermission = true;
+  let first = true;
+
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    if (first) {
+      first = false;
+      const error = new Error("not found");
+      error.response = { status: 404 };
+      throw error;
+    }
+    return {
+      data: {
+        id: "target-writer-123",
+        name: "sample.xlsx",
+        size: "2000000",
+        mimeType: "application/octet-stream",
+        md5Checksum: "abc123",
+      },
+    };
+  };
+
+  const result = await tryServerSideDriveCopy(context);
+
+  assert.equal(result.kind, "copied");
+  assert.equal(calls.copy.length, 2);
+  assert.equal(calls.permissionCreate.length, 1);
+  assert.equal(calls.permissionCreate[0][0].requestBody.role, "writer");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.permissionDelete.length, 1);
+});
+
+test("ambiguous copy after temporary share cleans permission and reconciles", async () => {
+  const { context, calls } = makeContext();
+  context.sourceMetadata.size = "2000000";
+  let first = true;
+
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    const error = new Error(first ? "not found" : "service unavailable");
+    error.response = { status: first ? 404 : 503 };
+    first = false;
+    throw error;
+  };
+
+  const result = await tryServerSideDriveCopy(context);
+
+  assert.equal(result.kind, "reconciling");
+  assert.equal(calls.permissionCreate.length, 1);
+  assert.equal(calls.permissionDelete.length, 1);
+  assert.equal(calls.copy.length, 2);
+  assert.equal(calls.reconcile.length, 1);
 });
 
 test("ambiguous 503 enters reconciliation", async () => {
@@ -152,7 +300,8 @@ test("disabled feature never touches Drive", async () => {
   const result = await tryServerSideDriveCopy(context);
 
   assert.equal(result.kind, "fallback");
-  assert.equal(calls.get.length, 0);
   assert.equal(calls.copy.length, 0);
+  assert.equal(calls.permissionCreate.length, 0);
+  assert.equal(calls.permissionDelete.length, 0);
   assert.equal(calls.reconcile.length, 0);
 });

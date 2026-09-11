@@ -4,7 +4,6 @@ const RETENTION_STATUSES = new Set([
   "pending",
   "failed",
   "blocked_target_missing",
-  "deleted",
 ]);
 
 function safePositiveInt(value, fallback, max = 100) {

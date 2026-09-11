@@ -29,8 +29,8 @@ export const pool = new Pool({
     process.env.DB_IDLE_TIMEOUT_MS || 15_000
   ),
 
-  // Keep DB concurrency bounded independently from the 25 Drive workers.
-  max: Number(process.env.DB_POOL_MAX || 6),
+  // Keep DB concurrency bounded independently from the 60 Drive workers.
+  max: Number(process.env.DB_POOL_MAX || 12),
 
   // TCP keepalive reduces stale long-lived socket failures.
   keepAlive: true,

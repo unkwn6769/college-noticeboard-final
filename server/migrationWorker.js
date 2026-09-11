@@ -1076,6 +1076,49 @@ export async function claimNextItem(migrationId) {
 
     const item = result.rows[0];
 
+    if (
+      item.status === "reconciling" &&
+      item.reconciliation_deadline &&
+      new Date(item.reconciliation_deadline).getTime() <= Date.now()
+    ) {
+      const expiredResult = await client.query(
+        `
+        UPDATE google_drive_account_migration_items
+        SET
+          status = 'reconciliation_expired',
+          transfer_phase = 'reconciliation_expired',
+          target_recovery_required = TRUE,
+          error_message = 'Reconciliation deadline reached; manual intervention required',
+          next_retry_at = NULL,
+          lease_expires_at = NULL,
+          updated_at = NOW()
+        WHERE id = $1
+          AND lease_generation = $2
+          AND status = 'reconciling'
+          AND reconciliation_deadline IS NOT NULL
+          AND reconciliation_deadline <= NOW()
+        RETURNING
+          id,
+          migration_id,
+          source_file_id,
+          target_file_id,
+          target_account_id,
+          size_bytes,
+          bytes_transferred,
+          transfer_phase,
+          target_recovery_required,
+          reconciliation_deadline,
+          started_at,
+          status,
+          lease_generation
+        `,
+        [item.id, item.lease_generation]
+      );
+
+      await client.query("COMMIT");
+      return expiredResult.rows[0] ?? null;
+    }
+
     const updateResult = await client.query(
       `
       UPDATE google_drive_account_migration_items
@@ -2576,7 +2619,7 @@ export async function migrateOneItem(
     const sourceMetadataResponse =
       await sourceDrive.files.get({
         fileId: item.source_file_id,
-        fields: "id,name,size,mimeType,md5Checksum",
+        fields: "id,name,size,mimeType,md5Checksum,copyRequiresWriterPermission",
       }, {
         signal: abortController.signal,
       });
@@ -2861,6 +2904,7 @@ export async function migrateOneItem(
        * the existing Render-mediated streaming path.
        */
       const serverSideCopyResult = await tryServerSideDriveCopy({
+        sourceDrive,
         targetDrive,
         targetAccount,
         item,
@@ -3079,7 +3123,7 @@ export async function migrateOneItem(
       const targetMetadataResponse =
         await targetDrive.files.get({
           fileId: targetFileId,
-          fields: "id,name,size,mimeType,md5Checksum",
+          fields: "id,name,size,mimeType,md5Checksum,copyRequiresWriterPermission",
         }, {
           signal: abortController.signal,
         });

@@ -8,9 +8,12 @@ import {
   finalizeCancellationIfIdle,
 } from "./migrationWorker.js";
 
-const BATCH_SIZE = Math.min(60, Math.max(1, Number(process.env.MIGRATION_FILE_WORKERS || 40)));
+const BATCH_SIZE = Math.min(60, Math.max(1, Number(process.env.MIGRATION_FILE_WORKERS || 60)));
 const POLL_MS = 1000;
-const MAX_CONCURRENT_MIGRATIONS = 3;
+const MAX_CONCURRENT_MIGRATIONS = Math.min(
+  3,
+  Math.max(1, Number(process.env.MIGRATION_MAX_CONCURRENT || 1))
+);
 const SCHEDULER_LEASE_ID = 1;
 const SCHEDULER_LEASE_MS = 15_000;
 const SCHEDULER_HEARTBEAT_MS = 5_000;

@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import { pool } from "../db/database.js";
 
 const DRIVE_CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DRIVE_HTTP2_ENABLED =
+  String(process.env.GOOGLE_DRIVE_HTTP2 || "true").toLowerCase() === "true";
 const driveClientCache = new Map();
 const driveClientInflight = new Map();
 
@@ -209,6 +211,7 @@ export async function getGoogleDriveClientForAccount(account) {
     return google.drive({
       version: "v3",
       auth,
+      http2: DRIVE_HTTP2_ENABLED,
     });
   }
 
@@ -230,6 +233,7 @@ export async function getGoogleDriveClientForAccount(account) {
     const drive = google.drive({
       version: "v3",
       auth,
+      http2: DRIVE_HTTP2_ENABLED,
     });
 
     driveClientCache.set(cacheKey, {

@@ -5,7 +5,7 @@ import {
   finalizeCancellationIfIdle,
 } from "./migrationWorker.js";
 
-const DEFAULT_FILE_WORKERS = 40;
+const DEFAULT_FILE_WORKERS = 60;
 const MAX_FILE_WORKERS_PER_MIGRATION = 60;
 const DEFAULT_BATCH_SIZE = DEFAULT_FILE_WORKERS;
 const MAX_BATCH_SIZE = MAX_FILE_WORKERS_PER_MIGRATION;

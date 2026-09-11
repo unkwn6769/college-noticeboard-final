@@ -1,3 +1,4 @@
+import { tryServerSideDriveCopy } from "./migrationDriveCopy.js";
 import { pool } from "./db/database.js";
 import {
   getGoogleDriveClientForAccount,
@@ -2855,9 +2856,48 @@ export async function migrateOneItem(
       ensureHeartbeatStillValid();
 
       /*
-       * Normal attempts upload immediately. Recovery attempts have already
-       * passed through the bounded reconciliation path above.
+       * Normal attempts prefer a target-authenticated Google Drive copy when
+       * the target user is allowed to copy the source file. Otherwise we keep
+       * the existing Render-mediated streaming path.
        */
+      const serverSideCopyResult = await tryServerSideDriveCopy({
+        targetDrive,
+        targetAccount,
+        item,
+        sourceMetadata,
+        abortController,
+        ensureHeartbeatStillValid,
+        workerNumber,
+        log,
+        markItemReconcilingFn: markItemReconciling,
+        reconciliationDeadlineMs: RECONCILIATION_DEADLINE_MS,
+      });
+
+      if (serverSideCopyResult.kind === "reconciling") {
+        return serverSideCopyResult;
+      }
+
+      if (serverSideCopyResult.kind === "copied") {
+        createdTargetFile = true;
+        targetFileId = serverSideCopyResult.targetFileId;
+        uploadResponse = { data: serverSideCopyResult.targetMetadata };
+
+        await persistTargetFileId(
+          item.id,
+          item.lease_generation,
+          targetFileId
+        );
+
+        await updateItemProgress(
+          item.id,
+          item.lease_generation,
+          toBigInt(sourceMetadata.size ?? 0, "sourceMetadata.size"),
+          "verifying"
+        );
+      }
+    }
+
+    if (!targetFileId) {
       const transferStartedAt = item.started_at
           ? new Date(item.started_at)
           : new Date();

@@ -1602,6 +1602,10 @@ async function requeueItemAfterAmbiguousUpload(
 }
 
 const RECONCILIATION_DEADLINE_MS = 10 * 60 * 1000;
+const RECONCILIATION_RETRY_DELAY_MS = Math.max(
+  1_000,
+  Number(process.env.MIGRATION_RECONCILIATION_RETRY_DELAY_MS || 2_000)
+);
 
 export async function markItemReconciling(
   itemId,
@@ -1621,12 +1625,18 @@ export async function markItemReconciling(
       ),
       error_message = $2,
       transfer_phase = 'reconciling',
-      next_retry_at = NOW() + INTERVAL '30 seconds',
+      next_retry_at = NOW() + ($3 * INTERVAL '1 millisecond'),
       lease_expires_at = NULL,
       updated_at = NOW()
-    WHERE id = $3 AND lease_generation = $4
+    WHERE id = $4 AND lease_generation = $5
     `,
-    [deadlineMs, errorMessage, itemId, leaseGeneration]
+    [
+      deadlineMs,
+      errorMessage,
+      RECONCILIATION_RETRY_DELAY_MS,
+      itemId,
+      leaseGeneration,
+    ]
   );
   assertFencedUpdate(result, itemId);
 }

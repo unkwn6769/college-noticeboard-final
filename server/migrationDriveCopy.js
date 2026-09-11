@@ -11,11 +11,36 @@
 
 const DEFAULT_SHARE_THRESHOLD_BYTES = 512 * 1024;
 const SHARE_COPY_RETRY_DELAYS_MS = [50, 125, 250, 400];
+const DRIVE_THROTTLE_RETRY_DELAYS_MS = [100, 250, 600, 1200];
 const MIN_ESTIMATED_STREAM_DURATION_MS = 2500;
 const TEMP_PERMISSION_EXPIRATION_MS = 15 * 60 * 1000;
 
 function getDriveErrorStatus(error) {
   return Number(error?.response?.status ?? error?.code ?? 0) || 0;
+}
+
+function getDriveErrorReason(error) {
+  return String(
+    error?.response?.data?.error?.errors?.[0]?.reason ??
+      error?.response?.data?.error?.status ??
+      error?.errors?.[0]?.reason ??
+      ""
+  );
+}
+
+function isRetryableDriveThrottle(error) {
+  const status = getDriveErrorStatus(error);
+  const reason = getDriveErrorReason(error);
+
+  return (
+    status === 429 ||
+    (status === 403 &&
+      ["rateLimitExceeded", "userRateLimitExceeded"].includes(reason))
+  );
+}
+
+function getRetryDelayWithJitter(delayMs) {
+  return delayMs + Math.floor(Math.random() * Math.min(100, Math.max(10, delayMs / 4)));
 }
 
 
@@ -122,6 +147,29 @@ async function copyOnce({
   );
 }
 
+async function copyOnceWithThrottleRetry(args, log, label) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await copyOnce(args);
+    } catch (error) {
+      if (attempt >= DRIVE_THROTTLE_RETRY_DELAYS_MS.length || !isRetryableDriveThrottle(error)) {
+        throw error;
+      }
+
+      const delayMs = getRetryDelayWithJitter(
+        DRIVE_THROTTLE_RETRY_DELAYS_MS[attempt]
+      );
+
+      log(
+        `Drive API throttled ${label}; retrying in ${delayMs}ms ` +
+          `(attempt ${attempt + 1}/${DRIVE_THROTTLE_RETRY_DELAYS_MS.length})`
+      );
+
+      await sleep(delayMs);
+    }
+  }
+}
+
 async function copyWithTemporarySourcePermission({
   sourceDrive,
   targetDrive,
@@ -150,12 +198,11 @@ async function copyWithTemporarySourcePermission({
       }
 
       try {
-        return await copyOnce({
-          targetDrive,
-          sourceMetadata,
-          item,
-          abortController,
-        });
+        return await copyOnceWithThrottleRetry(
+          { targetDrive, sourceMetadata, item, abortController },
+          log,
+          `temporary-copy ${sourceMetadata.name}`
+        );
       } catch (error) {
         lastError = error;
         if (getDriveErrorStatus(error) !== 404) {
@@ -211,12 +258,11 @@ export async function tryServerSideDriveCopy({
   let copyResponse;
 
   try {
-    copyResponse = await copyOnce({
-      targetDrive,
-      sourceMetadata,
-      item,
-      abortController,
-    });
+    copyResponse = await copyOnceWithThrottleRetry(
+      { targetDrive, sourceMetadata, item, abortController },
+      log,
+      sourceMetadata.name
+    );
   } catch (error) {
     let status = getDriveErrorStatus(error);
 

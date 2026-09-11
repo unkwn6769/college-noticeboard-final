@@ -153,6 +153,37 @@ test("large 404 temporarily shares source and then copies in Google", async () =
   assert.equal(calls.permissionDelete[0][0].permissionId, "perm-123");
 });
 
+test("429 is retried with backoff instead of entering reconciliation", async () => {
+  const { context, calls } = makeContext();
+  let attempts = 0;
+
+  context.targetDrive.files.copy = async (...args) => {
+    calls.copy.push(args);
+    attempts += 1;
+    if (attempts < 3) {
+      const error = new Error("rate limited");
+      error.response = { status: 429 };
+      throw error;
+    }
+
+    return {
+      data: {
+        id: "target-throttle-123",
+        name: "sample.xlsx",
+        size: "1234",
+        mimeType: "application/octet-stream",
+        md5Checksum: "abc123",
+      },
+    };
+  };
+
+  const result = await tryServerSideDriveCopy(context);
+
+  assert.equal(result.kind, "copied");
+  assert.equal(calls.copy.length, 3);
+  assert.equal(calls.reconcile.length, 0);
+});
+
 test("403 falls back without a second copy", async () => {
   const { context, calls } = makeContext();
   context.targetDrive.files.copy = async (...args) => {

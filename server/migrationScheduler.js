@@ -5,16 +5,19 @@ import {
 } from "./migrationRunner.js";
 import {
   retryFailedSourceDeletion,
+  finalizeCancellationIfIdle,
 } from "./migrationWorker.js";
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = Math.min(60, Math.max(1, Number(process.env.MIGRATION_FILE_WORKERS || 40)));
 const POLL_MS = 1000;
 const MAX_CONCURRENT_MIGRATIONS = 3;
 const SCHEDULER_LEASE_ID = 1;
 const SCHEDULER_LEASE_MS = 15_000;
 const SCHEDULER_HEARTBEAT_MS = 5_000;
 const CLEANUP_POLL_MS = 30_000;
+const STALE_RECOVERY_POLL_MS = 10_000;
 let lastCleanupCheck = 0;
+let lastStaleRecoveryCheck = 0;
 
 /*
  * If the server restarts while an item is being processed,
@@ -165,26 +168,28 @@ export async function recoverStaleRunningItems() {
 
 async function finalizeOrphanedCancellationRequests() {
   const result = await pool.query(`
-    UPDATE google_drive_account_migrations m
-    SET
-      status = 'cancelled',
-      finished_at = COALESCE(finished_at, NOW()),
-      updated_at = NOW()
-    WHERE m.cancel_requested = TRUE
-      AND m.status IN ('pending', 'running', 'waiting_for_storage')
-      AND NOT EXISTS (
-        SELECT 1
-        FROM google_drive_account_migration_items i
-        WHERE i.migration_id = m.id
-          AND i.status = 'running'
-      )
-    RETURNING id
+    SELECT id
+    FROM google_drive_account_migrations
+    WHERE cancel_requested = TRUE
+      AND status IN ('pending', 'running', 'waiting_for_storage')
+    ORDER BY updated_at ASC
+    LIMIT 20
   `);
 
   for (const row of result.rows) {
-    console.log(
-      `[MIGRATION SCHEDULER] Finalized cancelled migration ${row.id}`
-    );
+    try {
+      const finalized = await finalizeCancellationIfIdle(row.id);
+      if (finalized) {
+        console.log(
+          `[MIGRATION SCHEDULER] Finalized cancelled migration ${row.id}`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `[MIGRATION SCHEDULER] Cancellation finalization failed for ${row.id}:`,
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 }
 
@@ -495,30 +500,17 @@ export async function startMigrationScheduler() {
   );
 
   /*
-   * Recover interrupted work before starting
-   * the normal scheduler loop.
+   * Render deployments can briefly overlap. Wait for the old scheduler
+   * lease instead of permanently abandoning scheduling.
    */
   let acquired = false;
-
-  /*
-   * Render deployments can briefly overlap old and new instances.
-   * Do not permanently abandon scheduling when another instance
-   * currently owns the lease. Wait and retry until the old lease
-   * is released or expires.
-   */
   while (!schedulerStopRequested) {
     acquired = await acquireSchedulerLease();
-
-    if (acquired) {
-      break;
-    }
+    if (acquired) break;
 
     console.log(
-      `[MIGRATION SCHEDULER] Lease is currently held; retrying in ${
-        SCHEDULER_HEARTBEAT_MS / 1000
-      }s`
+      `[MIGRATION SCHEDULER] Lease is currently held; retrying in ${SCHEDULER_HEARTBEAT_MS / 1000}s`
     );
-
     await sleep(SCHEDULER_HEARTBEAT_MS);
   }
 
@@ -556,6 +548,21 @@ export async function startMigrationScheduler() {
 
     while (!schedulerStopRequested) {
       const now = Date.now();
+
+      if (
+        now - lastStaleRecoveryCheck >=
+        STALE_RECOVERY_POLL_MS
+      ) {
+        lastStaleRecoveryCheck = now;
+        try {
+          await recoverStaleRunningItems();
+        } catch (error) {
+          console.error(
+            "[MIGRATION SCHEDULER] Failed to recover stale items:",
+            error instanceof Error ? error.message : error
+          );
+        }
+      }
 
       if (
         now - lastCleanupCheck >=

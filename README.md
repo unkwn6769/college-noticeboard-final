@@ -1,19 +1,59 @@
-# React + Vite
+# College Noticeboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A React/Vite frontend plus Express/PostgreSQL backend for a college noticeboard, Google Drive-backed storage, admin operations, and safe multi-account Drive migration.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev:all
+```
 
-## React Compiler
+Frontend: `http://localhost:5173`
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Backend: `http://localhost:3001`
 
-## Expanding the Oxlint configuration
+Copy `.env.example` to `.env` and provide the required credentials/secrets. Never commit the real `.env`.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
-# college-noticeboard
-# college-noticeboard
-# college-noticeboard
+## Build
+
+```bash
+npm run build
+```
+
+## Tests
+
+```bash
+npm test
+```
+
+The backend test suite uses the configured PostgreSQL environment.
+
+## Admin areas
+
+- `/admin`
+- `/admin/accounts`
+- `/admin/accounts/:accountId/files`
+- `/admin/storage`
+- `/admin/storage/health`
+- `/admin/storage/file-types`
+- `/admin/file-search`
+- `/admin/activity`
+- `/admin/recycle-bin`
+- `/admin/source-retention`
+
+## Migration batch selection
+
+The admin migration modal supports all files, a custom count, or size-based selection with:
+
+- target total size,
+- minimum and maximum file size,
+- minimum and maximum file count.
+
+Files in size mode are selected largest-first from the configured size range until both the target size and minimum file count are reached, subject to the maximum file count.
+
+## Migration reliability
+
+Migration items use durable target identity, per-item lease generations, worker heartbeats, reconciliation, retry delays, scheduler leasing, stale-item recovery, and guarded source deletion.
+
+See `MIGRATION_FIXES.md` and `PROJECT_SUMMARY.md` for the full design and the fixes finalized during the migration work.

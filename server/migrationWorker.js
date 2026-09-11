@@ -61,8 +61,8 @@ function assertFencedUpdate(result, itemId) {
 
 const transientRetryCounts = new Map();
 
-const TARGET_ACCOUNTS_CACHE_TTL_MS = 15_000;
-const QUOTA_CACHE_TTL_MS = 10_000;
+const TARGET_ACCOUNTS_CACHE_TTL_MS = 5_000;
+const QUOTA_CACHE_TTL_MS = 1_000;
 
 let targetAccountsCache = {
   expiresAt: 0,
@@ -1093,6 +1093,7 @@ export async function claimNextItem(migrationId) {
           ELSE 'downloading'
         END,
         reconciliation_deadline = CASE WHEN status = 'reconciling' THEN reconciliation_deadline ELSE NULL END,
+        next_retry_at = CASE WHEN status = 'reconciling' THEN next_retry_at ELSE NULL END,
         updated_at = NOW(),
         error_message = NULL
       WHERE id = $1
@@ -1463,6 +1464,8 @@ async function requeueItemWhenNoCapacity(
       bytes_transferred = 0,
       transfer_phase = 'pending',
       error_message = $1,
+      next_retry_at = NOW() + INTERVAL '3 seconds',
+      lease_expires_at = NULL,
       updated_at = NOW()
     WHERE id = $2 AND lease_generation = $3
     `,
@@ -1568,10 +1571,14 @@ export async function markItemReconciling(
     SET
       status = 'reconciling',
       target_recovery_required = TRUE,
-      reconciliation_deadline = NOW() + ($1 * INTERVAL '1 millisecond'),
+      reconciliation_deadline = COALESCE(
+        reconciliation_deadline,
+        NOW() + ($1 * INTERVAL '1 millisecond')
+      ),
       error_message = $2,
       transfer_phase = 'reconciling',
       next_retry_at = NOW() + INTERVAL '30 seconds',
+      lease_expires_at = NULL,
       updated_at = NOW()
     WHERE id = $3 AND lease_generation = $4
     `,
@@ -1594,6 +1601,7 @@ export async function markItemReconciliationExpired(
       target_recovery_required = TRUE,
       error_message = $1,
       next_retry_at = NULL,
+      lease_expires_at = NULL,
       updated_at = NOW()
     WHERE id = $2 AND lease_generation = $3
     `,
@@ -2095,7 +2103,7 @@ export async function retryFailedSourceDeletion(
   };
 }
 
-const PROGRESS_WRITE_INTERVAL_MS = 2500;
+const PROGRESS_WRITE_INTERVAL_MS = 1000;
 
 /*
  * Progress is written at a bounded rate so a large file does not
@@ -2231,9 +2239,6 @@ export function createTrackedUploadStream(
   }
 
   tracker = new Transform({
-    readableHighWaterMark: 1024 * 1024,
-    writableHighWaterMark: 1024 * 1024,
-
     transform(chunk, encoding, callback) {
       if (fenceError) {
         callback(fenceError);
@@ -2256,9 +2261,8 @@ export function createTrackedUploadStream(
       }
 
       /*
-       * Do not force a final PostgreSQL progress write here.
-       * The caller immediately advances the item to the next
-       * fenced transfer phase after the upload completes.
+       * The upload completion is immediately followed by a fenced progress
+       * transition, so avoid an extra forced PostgreSQL UPDATE here.
        */
       callback();
     },
@@ -2294,21 +2298,14 @@ export function createTrackedUploadStream(
     tracker.destroy(error);
   });
 
-  tracker.transferStartedAt = Date.now();
-  tracker.sourceStreamEndedAt = null;
-
-  sourceStream.once("end", () => {
-    tracker.sourceStreamEndedAt = Date.now();
-  });
-
   sourceStream.pipe(tracker);
 
   tracker.getFenceError = () => fenceError;
 
   tracker.getProgressState = async () => {
     /*
-     * Wait for progress writes already queued during the transfer,
-     * but do not enqueue another redundant final UPDATE.
+     * Wait only for progress writes already queued during the transfer;
+     * do not enqueue another redundant final UPDATE.
      */
     await writeChain;
 
@@ -2339,13 +2336,6 @@ export function createTrackedUploadStream(
       speedBytesPerSecond: speed,
       etaSeconds: eta,
       elapsedSeconds,
-      transferElapsedMs:
-        Date.now() - tracker.transferStartedAt,
-      sourceStreamElapsedMs:
-        tracker.sourceStreamEndedAt == null
-          ? null
-          : tracker.sourceStreamEndedAt -
-            tracker.transferStartedAt,
     };
   };
 
@@ -2364,21 +2354,69 @@ async function isMigrationCancelRequested(migrationId) {
 }
 
 export async function finalizeCancellationIfIdle(migrationId) {
-  const result = await pool.query(
-    `
-    UPDATE google_drive_account_migrations m
-    SET status = 'cancelled', finished_at = COALESCE(finished_at, NOW()), updated_at = NOW()
-    WHERE m.id = $1
-      AND m.cancel_requested = TRUE
-      AND m.status IN ('pending', 'running', 'waiting_for_storage')
-      AND NOT EXISTS (
-        SELECT 1 FROM google_drive_account_migration_items i
-        WHERE i.migration_id = m.id AND i.status = 'running'
-      )
-    RETURNING id, status
-    `, [migrationId]
-  );
-  return result.rowCount > 0;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const running = await client.query(
+      `
+      SELECT 1
+      FROM google_drive_account_migration_items
+      WHERE migration_id = $1
+        AND status = 'running'
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+      `,
+      [migrationId]
+    );
+
+    if (running.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+
+    await client.query(
+      `
+      UPDATE google_drive_account_migration_items
+      SET
+        status = 'cancelled',
+        lease_expires_at = NULL,
+        next_retry_at = NULL,
+        reserved_bytes = 0,
+        updated_at = NOW(),
+        finished_at = COALESCE(finished_at, NOW())
+      WHERE migration_id = $1
+        AND status IN ('pending', 'reconciling')
+      `,
+      [migrationId]
+    );
+
+    const result = await client.query(
+      `
+      UPDATE google_drive_account_migrations m
+      SET
+        status = 'cancelled',
+        finished_at = COALESCE(finished_at, NOW()),
+        updated_at = NOW()
+      WHERE m.id = $1
+        AND m.cancel_requested = TRUE
+        AND m.status IN ('pending', 'running', 'waiting_for_storage')
+      RETURNING id, status
+      `,
+      [migrationId]
+    );
+
+    await client.query("COMMIT");
+    return result.rowCount > 0;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function migrateOneItem(
@@ -2642,66 +2680,6 @@ export async function migrateOneItem(
             );
           }
         }
-
-        if (!targetFileId) {
-          log(
-            `Recovery: searching Drive for uploaded target using migration item ${item.id}`
-          );
-
-          try {
-            const existingAssignedTarget =
-              await findExistingTargetFile(
-                assignedDrive,
-                item.id
-              );
-
-            log(
-              `Recovery: existing-target search finished` +
-              ` (${existingAssignedTarget?.id ?? "not found"})`
-            );
-
-            if (existingAssignedTarget?.id) {
-              targetFileId =
-                existingAssignedTarget.id;
-
-              await persistTargetFileId(
-                item.id,
-                item.lease_generation,
-                targetFileId
-              );
-
-              await persistRecoveredTargetProgress(
-                item.id,
-                item.lease_generation,
-                sourceMetadata.size ?? 0,
-                { clearRecoveryRequired: true }
-              );
-            }
-          } catch (recoverySearchError) {
-            if (
-              recoverySearchError instanceof Error &&
-              /multiple target files found/i.test(recoverySearchError.message)
-            ) {
-              const message = `Ambiguous target recovery for migration item ${item.id}; leaving the item unresolved`;
-              await markItemReconciling(
-                item.id,
-                item.lease_generation,
-                message,
-                RECONCILIATION_DEADLINE_MS
-              );
-
-              return {
-                status: "reconciling",
-                itemId: item.id,
-                sourceFileId: item.source_file_id,
-                workerNumber,
-                reason: message,
-              };
-            }
-
-            throw recoverySearchError;
-          }
-        }
       } else if (item.target_file_id) {
         /*
          * We have a durable target ID but cannot currently access
@@ -2877,71 +2855,10 @@ export async function migrateOneItem(
       ensureHeartbeatStillValid();
 
       /*
-       * Clean first attempts upload immediately. Recovered attempts first
-       * reconcile by migration marker so a previous successful upload is
-       * reused instead of duplicated. If recovery finds nothing, continue
-       * with a fresh upload.
+       * Normal attempts upload immediately. Recovery attempts have already
+       * passed through the bounded reconciliation path above.
        */
-      if (item.target_recovery_required) {
-        log(
-          `Checking for existing target copy of ${sourceMetadata.name}`
-        );
-
-        try {
-          const existingTarget =
-            await findExistingTargetFile(
-              targetDrive,
-              item.id
-            );
-
-          if (existingTarget?.id) {
-            log(
-              `Found existing target ${existingTarget.id}; reusing it`
-            );
-
-            targetFileId = existingTarget.id;
-
-            await persistTargetFileId(
-              item.id,
-              item.lease_generation,
-              targetFileId
-            );
-
-            await persistRecoveredTargetProgress(
-              item.id,
-              item.lease_generation,
-              sourceMetadata.size ?? 0,
-              { clearRecoveryRequired: true }
-            );
-          }
-        } catch (recoverySearchError) {
-          if (
-            recoverySearchError instanceof Error &&
-            /multiple target files found/i.test(recoverySearchError.message)
-          ) {
-            const message = `Ambiguous target recovery for migration item ${item.id}; leaving the item unresolved`;
-            await markItemReconciling(
-              item.id,
-              item.lease_generation,
-              message,
-              RECONCILIATION_DEADLINE_MS
-            );
-
-            return {
-              status: "reconciling",
-              itemId: item.id,
-              sourceFileId: item.source_file_id,
-              workerNumber,
-              reason: message,
-            };
-          }
-
-          throw recoverySearchError;
-        }
-      }
-
-      if (!targetFileId) {
-        const transferStartedAt = item.started_at
+      const transferStartedAt = item.started_at
           ? new Date(item.started_at)
           : new Date();
 
@@ -2985,8 +2902,6 @@ export async function migrateOneItem(
             }
           );
 
-        const uploadStartedAt = Date.now();
-
         try {
           uploadResponse =
             await targetDrive.files.create({
@@ -3011,14 +2926,6 @@ export async function migrateOneItem(
             }, {
               signal: abortController.signal,
             });
-
-          const uploadElapsedMs =
-            Date.now() - uploadStartedAt;
-
-          log(
-            `Upload completed for ${sourceMetadata.name} ` +
-            `in ${uploadElapsedMs}ms`
-          );
         } catch (error) {
           if (isFencedWorkerError(error) || isAbortError(error)) {
             throw error;
@@ -3042,19 +2949,7 @@ export async function migrateOneItem(
           };
         }
 
-        const transferState =
-          await trackedUploadStream.getProgressState();
-
-        const sourceElapsedMs =
-          transferState.sourceStreamElapsedMs;
-
-        log(
-          `Transfer timing for ${sourceMetadata.name}: ` +
-          `${transferState.bytesTransferred} bytes, ` +
-          `source=${sourceElapsedMs == null ? "n/a" : `${(sourceElapsedMs / 1000).toFixed(2)}s`}, ` +
-          `total=${(transferState.transferElapsedMs / 1000).toFixed(2)}s, ` +
-          `rate=${(transferState.speedBytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`
-        );
+        await trackedUploadStream.getProgressState();
 
         targetFileId =
           uploadResponse?.data?.id ?? null;
@@ -3120,7 +3015,6 @@ export async function migrateOneItem(
           "verifying"
         );
       }
-    }
 
     ensureHeartbeatStillValid();
 

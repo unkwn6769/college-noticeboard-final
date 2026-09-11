@@ -33,7 +33,6 @@ import { getStorageFileTypeSummary } from "./storage/storageFileTypes.js";
 import { getStorageHealth } from "./storage/storageHealth.js";
 import { listRecycleBin, restoreRecycleBinFile, permanentlyDeleteRecycleBinFile } from "./recycleBin.js";
 import { getSourceRetentionVisibility, normalizeSourceRetentionFilters } from "./sourceRetention.js";
-import { runNetworkDiagnostic } from "./networkDiagnostic.js";
 import { getFileTypeExtensions } from "./storage/storageFileTypesMath.js";
 import {
   buildDriveFileSearchWhere,
@@ -78,24 +77,6 @@ app.use(
 );
 
 app.use(express.json());
-
-app.get(
-  "/api/admin/network-diagnostic",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      res.set("Cache-Control", "no-store");
-      return res.json(await runNetworkDiagnostic());
-    } catch (error) {
-      console.error("Admin network diagnostic failed:", error);
-      return res.status(502).json({
-        error: "Network diagnostic failed",
-      });
-    }
-  }
-);
-
-
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -143,76 +124,6 @@ app.get(
   }
 );
 
-
-// "/api/admin/source-retention"
-app.get(
-  "/api/admin/source-retention",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const filters = normalizeSourceRetentionFilters(req.query);
-      const allowedItemStatuses = new Set([
-        "pending",
-        "running",
-        "completed",
-        "failed",
-        "reconciling",
-        "reconciliation_expired",
-        "ambiguous_identity",
-        "cancelled",
-      ]);
-
-      if (filters.itemStatus && !allowedItemStatuses.has(filters.itemStatus)) {
-        return res.status(400).json({ error: "Invalid item status" });
-      }
-
-      return res.json(await getSourceRetentionVisibility(filters));
-    } catch (error) {
-      console.error("Admin source-retention lookup failed:", error);
-      return res.status(500).json({ error: "Failed to load source-retention status" });
-    }
-  }
-);
-
-// "/api/admin/source-retention/:itemId/retry"
-app.post(
-  "/api/admin/source-retention/:itemId/retry",
-  requireOwner,
-  async (req, res) => {
-    try {
-      const itemId = String(req.params.itemId || "").trim();
-      if (!itemId) {
-        return res.status(400).json({ error: "Migration item id is required" });
-      }
-
-      const result = await retryFailedSourceDeletion(itemId);
-
-      if (result.status === "skipped") {
-        return res.status(409).json({
-          error: "This item is not currently eligible for source cleanup retry",
-          result,
-        });
-      }
-
-      await logAdminActivity({
-        req,
-        admin: req.admin,
-        eventType: ACTIVITY_EVENT_TYPES.SOURCE_CLEANUP_RETRY,
-        entityType: "migration_item",
-        entityId: itemId,
-        description: `Retried source cleanup for migration item ${itemId}`,
-        metadata: { result },
-      });
-
-      return res.json({ result });
-    } catch (error) {
-      console.error("Admin source cleanup retry failed:", error);
-      return res.status(error?.status || 500).json({
-        error: error?.message || "Failed to retry source cleanup",
-      });
-    }
-  }
-);
 
 // "/api/admin/recycle-bin"
 app.get(
@@ -1407,6 +1318,74 @@ app.delete(
   }
 );
 
+// "/api/admin/source-retention"
+app.get(
+  "/api/admin/source-retention",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const filters = normalizeSourceRetentionFilters(req.query);
+      const allowedItemStatuses = new Set([
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "reconciling",
+        "reconciliation_expired",
+        "ambiguous_identity",
+        "cancelled",
+      ]);
+
+      if (filters.itemStatus && !allowedItemStatuses.has(filters.itemStatus)) {
+        return res.status(400).json({ error: "Invalid item status" });
+      }
+
+      return res.json(await getSourceRetentionVisibility(filters));
+    } catch (error) {
+      console.error("Admin source-retention lookup failed:", error);
+      return res.status(500).json({ error: "Failed to load source-retention status" });
+    }
+  }
+);
+
+// "/api/admin/source-retention/:itemId/retry"
+app.post(
+  "/api/admin/source-retention/:itemId/retry",
+  requireOwner,
+  async (req, res) => {
+    try {
+      const itemId = String(req.params.itemId || "").trim();
+      if (!itemId) {
+        return res.status(400).json({ error: "Migration item id is required" });
+      }
+
+      const result = await retryFailedSourceDeletion(itemId);
+
+      if (result.status === "skipped") {
+        return res.status(409).json({
+          error: "This item is not currently eligible for source cleanup retry",
+          result,
+        });
+      }
+
+      await logAdminActivity({
+        req,
+        admin: req.admin,
+        eventType: ACTIVITY_EVENT_TYPES.SOURCE_CLEANUP_RETRY,
+        entityType: "migration_item",
+        entityId: itemId,
+        description: `Retried source cleanup for migration item ${itemId}`,
+        metadata: { result },
+      });
+
+      return res.json({ result });
+    } catch (error) {
+      console.error("Admin source-retention retry failed:", error);
+      return res.status(500).json({ error: "Failed to retry source cleanup" });
+    }
+  }
+);
+
 // "/api/admin/accounts/:id/migration"
 app.post(
   "/api/admin/accounts/:id/migration",
@@ -1435,154 +1414,104 @@ app.post(
           ? "count"
           : "all");
 
-      if (
-        !["all", "count", "size"].includes(
-          selectionMode
-        )
-      ) {
+      if (![
+        "all",
+        "count",
+        "size",
+      ].includes(selectionMode)) {
         return res.status(400).json({
-          error:
-            "Invalid migration selection mode",
+          error: "Invalid migration selection mode",
         });
       }
 
       let migrationLimit = null;
       let sizeSelection = null;
+      let selectedFileIds = null;
+      let selectedBytes = null;
 
       if (
-        selectionMode === "count" ||
-        selectionMode === "all"
+        (selectionMode === "count" || selectionMode === "all") &&
+        requestedLimit !== undefined &&
+        requestedLimit !== null &&
+        requestedLimit !== ""
       ) {
+        const parsedLimit =
+          Number(requestedLimit);
+
         if (
-          requestedLimit !== undefined &&
-          requestedLimit !== null &&
-          requestedLimit !== ""
+          !Number.isInteger(parsedLimit) ||
+          parsedLimit < 1 ||
+          parsedLimit > 100000
         ) {
-          const parsedLimit =
-            Number(requestedLimit);
-
-          if (
-            !Number.isInteger(parsedLimit) ||
-            parsedLimit < 1 ||
-            parsedLimit > 100000
-          ) {
-            return res.status(400).json({
-              error:
-                "Migration limit must be an integer between 1 and 100000",
-            });
-          }
-
-          migrationLimit = parsedLimit;
+          return res.status(400).json({
+            error:
+              "Migration limit must be an integer between 1 and 100000",
+          });
         }
+
+        migrationLimit = parsedLimit;
       }
 
       if (selectionMode === "size") {
-        const parseBigIntField = (
-          value,
-          fieldName
-        ) => {
-          try {
-            if (
-              value === undefined ||
-              value === null ||
-              value === ""
-            ) {
-              throw new Error(
-                `${fieldName} is required`
-              );
-            }
-
-            return BigInt(String(value));
-          } catch {
-            throw new Error(
-              `${fieldName} must be a valid integer`
-            );
+        const parseByteValue = (value, label) => {
+          if (value === undefined || value === null || value === "") {
+            throw new Error(`${label} is required`);
           }
-        };
 
-        let targetSizeBytes;
-        let minimumFileSizeBytes;
-        let maximumFileSizeBytes;
-        let maxFileCount;
+          const parsed = BigInt(String(value));
+          if (parsed < 0n) {
+            throw new Error(`${label} must be non-negative`);
+          }
+          return parsed;
+        };
 
         try {
-          targetSizeBytes =
-            parseBigIntField(
-              req.body?.targetSizeBytes,
-              "targetSizeBytes"
-            );
+          const targetSizeBytes =
+            parseByteValue(req.body?.targetSizeBytes, "Target size");
+          const minimumFileSizeBytes =
+            parseByteValue(req.body?.minimumFileSizeBytes, "Minimum file size");
+          const maximumFileSizeBytes =
+            parseByteValue(req.body?.maximumFileSizeBytes, "Maximum file size");
+          const minFileCount = Number(req.body?.minFileCount);
+          const maxFileCount = Number(req.body?.maxFileCount);
 
-          minimumFileSizeBytes =
-            parseBigIntField(
-              req.body?.minimumFileSizeBytes,
-              "minimumFileSizeBytes"
-            );
+          if (targetSizeBytes <= 0n) {
+            return res.status(400).json({
+              error: "Target size must be greater than 0 bytes",
+            });
+          }
 
-          maximumFileSizeBytes =
-            parseBigIntField(
-              req.body?.maximumFileSizeBytes,
-              "maximumFileSizeBytes"
-            );
+          if (maximumFileSizeBytes < minimumFileSizeBytes) {
+            return res.status(400).json({
+              error: "Maximum file size must be at least the minimum file size",
+            });
+          }
 
-          maxFileCount =
-            Number(req.body?.maxFileCount);
+          if (!Number.isInteger(minFileCount) || minFileCount < 1 || minFileCount > 100000) {
+            return res.status(400).json({
+              error: "Minimum file count must be an integer between 1 and 100000",
+            });
+          }
+
+          if (!Number.isInteger(maxFileCount) || maxFileCount < minFileCount || maxFileCount > 100000) {
+            return res.status(400).json({
+              error: "Maximum file count must be at least the minimum and no more than 100000",
+            });
+          }
+
+          sizeSelection = {
+            targetSizeBytes,
+            minimumFileSizeBytes,
+            maximumFileSizeBytes,
+            minFileCount,
+            maxFileCount,
+          };
+          migrationLimit = maxFileCount;
         } catch (error) {
           return res.status(400).json({
-            error:
-              error instanceof Error
-                ? error.message
-                : "Invalid size-based migration selection",
+            error: error instanceof Error ? error.message : String(error),
           });
         }
-
-        if (targetSizeBytes <= 0n) {
-          return res.status(400).json({
-            error:
-              "Target migration size must be greater than 0 bytes",
-          });
-        }
-
-        if (minimumFileSizeBytes < 0n) {
-          return res.status(400).json({
-            error:
-              "Minimum file size cannot be negative",
-          });
-        }
-
-        if (maximumFileSizeBytes <= 0n) {
-          return res.status(400).json({
-            error:
-              "Maximum file size must be greater than 0 bytes",
-          });
-        }
-
-        if (
-          maximumFileSizeBytes <
-          minimumFileSizeBytes
-        ) {
-          return res.status(400).json({
-            error:
-              "Maximum file size must be at least the minimum file size",
-          });
-        }
-
-        if (
-          !Number.isInteger(maxFileCount) ||
-          maxFileCount < 1 ||
-          maxFileCount > 100000
-        ) {
-          return res.status(400).json({
-            error:
-              "Maximum file count must be an integer between 1 and 100000",
-          });
-        }
-
-        sizeSelection = {
-          targetSizeBytes,
-          minimumFileSizeBytes,
-          maximumFileSizeBytes,
-          maxFileCount,
-        };
       }
 
       if (!targetAccountId) {
@@ -1748,22 +1677,8 @@ app.post(
       }
 
       let totalFiles;
-      let selectedFileIds = null;
-      let selectedBytes = null;
 
-      if (sizeSelection) {
-        /*
-         * Size-based benchmark selection:
-         *
-         * 1. Only actual available files.
-         * 2. Ignore unknown/small files below the threshold.
-         * 3. Consider largest files first.
-         * 4. Stop once the requested size is reached.
-         * 5. Never select more than maxFileCount.
-         *
-         * We intentionally do the accumulation in Node using
-         * BigInt so large byte totals remain exact.
-         */
+      if (selectionMode === "size") {
         const candidatesResult =
           await client.query(
             `
@@ -1794,48 +1709,35 @@ app.post(
         selectedFileIds = [];
         selectedBytes = 0n;
 
-        for (
-          const row of candidatesResult.rows
-        ) {
-          selectedFileIds.push(row.file_id);
-
-          selectedBytes += BigInt(
-            row.size_bytes || 0
-          );
+        for (const candidate of candidatesResult.rows) {
+          selectedFileIds.push(candidate.file_id);
+          selectedBytes += BigInt(candidate.size_bytes ?? 0);
 
           if (
-            selectedBytes >=
-            sizeSelection.targetSizeBytes
+            selectedBytes >= sizeSelection.targetSizeBytes &&
+            selectedFileIds.length >= sizeSelection.minFileCount
           ) {
             break;
           }
         }
 
-        if (selectedFileIds.length === 0) {
+        if (
+          selectedBytes < sizeSelection.targetSizeBytes ||
+          selectedFileIds.length < sizeSelection.minFileCount
+        ) {
           await client.query("ROLLBACK");
-
           return res.status(409).json({
             error:
-              "No available files match the requested minimum file size",
+              `Only ${(Number(selectedBytes) / 1024 / 1024).toFixed(1)} MB is available in the selected file-size range; the target is ${(Number(sizeSelection.targetSizeBytes) / 1024 / 1024).toFixed(1)} MB.`,
+            selectedBytes: selectedBytes.toString(),
+            targetSizeBytes: sizeSelection.targetSizeBytes.toString(),
+            qualifyingFiles: candidatesResult.rows.length,
+            selectedFiles: selectedFileIds.length,
+            minimumFiles: sizeSelection.minFileCount,
           });
         }
 
-        totalFiles =
-          selectedFileIds.length;
-
-        /*
-         * file_limit is intentionally non-null for a
-         * size-limited migration so the source account
-         * cannot be removed before this limited migration
-         * is fully completed.
-         */
-        migrationLimit = totalFiles;
-
-        /*
-         * The target may not be reachable within the
-         * maximum file count. That is allowed; the UI
-         * requested a maximum, not an exact byte count.
-         */
+        totalFiles = selectedFileIds.length;
       } else {
         totalFiles =
           migrationLimit === null
@@ -1896,24 +1798,9 @@ app.post(
        * Populate the actual migration items
        * in the SAME transaction.
        */
-      let insertItemsResult;
-
-      if (selectedFileIds) {
-        /*
-         * Re-select exactly the files chosen above.
-         * Dynamic placeholders keep this independent of
-         * the underlying file_id PostgreSQL type.
-         */
-        const filePlaceholders =
-          selectedFileIds
-            .map(
-              (_, index) =>
-                `$${index + 3}`
-            )
-            .join(", ");
-
-        insertItemsResult =
-          await client.query(
+      const insertItemsResult =
+        selectionMode === "size"
+          ? await client.query(
             `
             INSERT INTO google_drive_account_migration_items (
               id,
@@ -1934,17 +1821,12 @@ app.post(
             WHERE f.account_id = $2
               AND r.type = 'file'
               AND r.is_available = TRUE
-              AND f.file_id IN (${filePlaceholders})
+              AND f.file_id = ANY($3::text[])
+            ORDER BY COALESCE(r.size, 0)::bigint DESC, f.file_id
             `,
-            [
-              migrationId,
-              sourceAccountId,
-              ...selectedFileIds,
-            ]
-          );
-      } else {
-        insertItemsResult =
-          await client.query(
+            [migrationId, sourceAccountId, selectedFileIds]
+          )
+          : await client.query(
             `
             INSERT INTO google_drive_account_migration_items (
               id,
@@ -1968,13 +1850,8 @@ app.post(
             ORDER BY f.file_id
             LIMIT $3
             `,
-            [
-              migrationId,
-              sourceAccountId,
-              totalFiles,
-            ]
+            [migrationId, sourceAccountId, totalFiles]
           );
-      }
 
       if (
         insertItemsResult.rowCount !==
@@ -2013,6 +1890,14 @@ app.post(
           maximumFileSizeBytes:
             sizeSelection
               ? sizeSelection.maximumFileSizeBytes.toString()
+              : null,
+          minimumFileCount:
+            sizeSelection
+              ? sizeSelection.minFileCount
+              : null,
+          maximumFileCount:
+            sizeSelection
+              ? sizeSelection.maxFileCount
               : null,
           selectedBytes:
             selectedBytes === null

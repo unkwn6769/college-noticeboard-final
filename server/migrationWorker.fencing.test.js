@@ -700,6 +700,27 @@ test("new worker claim gets a newer generation after stale recovery", async (t) 
   assert.equal(claimed.id, fixture.itemId);
 });
 
+test("reconciling items respect next_retry_at before being reclaimed", async (t) => {
+  const fixture = await createFenceFixture({ leaseGeneration: 33 });
+  t.after(() => cleanupFenceFixture(fixture));
+
+  await pool.query(
+    `
+      UPDATE google_drive_account_migration_items
+      SET status = 'reconciling',
+          target_recovery_required = TRUE,
+          next_retry_at = NOW() + INTERVAL '30 seconds',
+          lease_expires_at = NULL,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [fixture.itemId]
+  );
+
+  const claimed = await claimNextItem(fixture.migrationId);
+  assert.equal(claimed, null);
+});
+
 test("recovery does not steal a valid lease", async (t) => {
   const fixture = await createFenceFixture({ leaseGeneration: 29 });
   t.after(() => cleanupFenceFixture(fixture));

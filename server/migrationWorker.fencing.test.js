@@ -1546,8 +1546,12 @@ test("reconciliation deadline expires the item instead of retrying upload", asyn
   };
 
   await withFakeGoogleDrive(() => fakeDrive, async () => {
-    await migrateOneItem(fixture.migrationId);
-  });
+  await migrateOneItem(fixture.migrationId);
+
+  // The first pass expires the item. The next scheduler pass sees
+  // no claimable items and finalizes the parent migration.
+  await migrateOneItem(fixture.migrationId);
+});
 
   const row = await pool.query(
     `SELECT status, error_message FROM google_drive_account_migration_items WHERE id = $1`,
@@ -1556,6 +1560,17 @@ test("reconciliation deadline expires the item instead of retrying upload", asyn
 
   assert.equal(row.rows[0].status, "reconciliation_expired");
   assert.match(String(row.rows[0].error_message), /deadline/i);
+
+  const migrationRow = await pool.query(
+    `SELECT status, completed_files, failed_files
+       FROM google_drive_account_migrations
+      WHERE id = $1`,
+    [fixture.migrationId]
+  );
+
+  assert.equal(migrationRow.rows[0].status, "failed");
+  assert.equal(migrationRow.rows[0].completed_files, "0");
+  assert.equal(migrationRow.rows[0].failed_files, "1");
 });
 
 test("valid target discovery during reconciliation is adopted and completed without a new upload", async (t) => {

@@ -51,10 +51,17 @@ import { retryFailedSourceDeletion } from "./migrationWorker.js";
 
 const app = express();
 
-const allowedOrigins = [
+const configuredOrigins = String(
+  process.env.ALLOWED_ORIGINS || "",
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const allowedOrigins = new Set([
   "http://localhost:5173",
-  "https://college-noticeboard.onrender.com",
-].filter(Boolean);
+  ...configuredOrigins,
+]);
 
 app.use(
   cors({
@@ -64,7 +71,7 @@ app.use(
         return callback(null, true);
       }
 
-      if (allowedOrigins.includes(origin)) {
+      if (allowedOrigins.has(origin)) {
         return callback(null, true);
       }
 

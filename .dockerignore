@@ -1,0 +1,11 @@
+.git
+node_modules
+server/node_modules
+dist
+.env
+.env.*
+!.env.example
+cloudflare/api/node_modules
+cloudflare/api/.wrangler
+*.log
+.DS_Store

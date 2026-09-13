@@ -203,7 +203,16 @@ export async function ensureMigrationSafetySchema() {
           CHECK (status IN ('pending','running','reconciling','reconciliation_expired','completed','failed','cancelled','ambiguous_identity'));
       END IF;
     END $$;
-  `);
+
+    ALTER TABLE google_drive_account_migration_items
+      ADD COLUMN IF NOT EXISTS upload_session_uri_encrypted TEXT;
+
+    ALTER TABLE google_drive_account_migration_items
+      ADD COLUMN IF NOT EXISTS upload_bytes_committed BIGINT NOT NULL DEFAULT 0;
+
+    ALTER TABLE google_drive_account_migration_items
+      ADD COLUMN IF NOT EXISTS upload_total_bytes BIGINT NOT NULL DEFAULT 0;
+`);
 }
 
 export async function ensureMigrationPerformanceIndexes() {

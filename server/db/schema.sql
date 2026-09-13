@@ -276,6 +276,10 @@ CREATE TABLE IF NOT EXISTS google_drive_account_migration_items (
     speed_bytes_per_second DOUBLE PRECISION NOT NULL DEFAULT 0,
     target_recovery_required BOOLEAN NOT NULL DEFAULT FALSE,
 
+    upload_session_uri_encrypted TEXT,
+    upload_bytes_committed BIGINT NOT NULL DEFAULT 0,
+    upload_total_bytes BIGINT NOT NULL DEFAULT 0,
+
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
 

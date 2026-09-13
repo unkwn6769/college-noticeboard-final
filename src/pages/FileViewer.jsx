@@ -32,10 +32,42 @@ function FileViewer() {
 
   const from = searchParams.get("from");
 
-  const backPath = from || `/noticeboards/${slug}/`;
   const backUrl = from
     ? `/department/${slug}?path=${encodeURIComponent(from)}`
     : `/department/${slug}`;
+
+  useEffect(() => {
+    if (!path) {
+      setCheckingFile(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function checkFileStatus() {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/file?path=${encodeURIComponent(path)}`
+        );
+
+        if (!cancelled) {
+          setFileUnavailable(response.status === 410);
+        }
+      } catch (error) {
+        console.error("File status check failed:", error);
+      } finally {
+        if (!cancelled) {
+          setCheckingFile(false);
+        }
+      }
+    }
+
+    checkFileStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
 
   if (!path) {
     return (
@@ -72,31 +104,7 @@ function FileViewer() {
   const fileUrl =
   `${API_URL}/api/file?path=${encodeURIComponent(path)}`
 
-  useEffect(() => {
-    let cancelled = false;
 
-    async function checkFileStatus() {
-      try {
-        const response = await fetch(`${API_URL}/api/file?path=${encodeURIComponent(path)}`);
-
-        if (!cancelled) {
-          setFileUnavailable(response.status === 410);
-        }
-      } catch (error) {
-        console.error("File status check failed:", error);
-      } finally {
-        if (!cancelled) {
-          setCheckingFile(false);
-        }
-      }
-    }
-
-    checkFileStatus();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [path]);
 
   const fileName = decodeURIComponent(
     path.split("/").filter(Boolean).pop() || "File"

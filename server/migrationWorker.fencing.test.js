@@ -1520,7 +1520,10 @@ test("reconciliation deadline expires the item instead of retrying upload", asyn
   );
 
   await pool.query(
-    `UPDATE google_drive_account_migration_items SET reconciliation_deadline = NOW() - INTERVAL '1 minute' WHERE id = $1`,
+    `UPDATE google_drive_account_migration_items
+       SET reconciliation_deadline = NOW() - INTERVAL '1 minute',
+           next_retry_at = NOW()
+       WHERE id = $1`,
     [fixture.itemId]
   );
 

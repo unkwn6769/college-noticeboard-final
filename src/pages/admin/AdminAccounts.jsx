@@ -215,14 +215,14 @@ function AdminAccounts() {
           return;
         }
 
-        setMigration(latest);
-
-        if (
+        const latestIsActive =
           latest.status === "pending" ||
           latest.status === "running" ||
-          latest.status ===
-            "waiting_for_storage"
-        ) {
+          latest.status === "waiting_for_storage";
+
+        setMigration(latest);
+
+        if (latestIsActive) {
           void pollMigration(migrationId);
           return;
         }
@@ -654,7 +654,7 @@ function AdminAccounts() {
           if (!safeToDelete) {
             setMigrationError(
               enrichedLatest.fileLimit !== null
-                ? "Migration test completed successfully. The source account was not removed because this was a limited migration."
+                ? "Limited migration completed successfully. The source account remains connected; selected-file cleanup is tracked separately."
                 : "Migration completed, but the source account was not removed because cleanup is incomplete."
             );
             return;
@@ -1007,9 +1007,12 @@ function AdminAccounts() {
     migration?.status === "completed" &&
     migration.transferredFiles ===
     migration.totalFiles &&
-    migration.sourceDeletedFiles ===
-    migration.totalFiles &&
     migration.cleanupFailedFiles === 0;
+
+  const migrationIsActive =
+    migration?.status === "pending" ||
+    migration?.status === "running" ||
+    migration?.status === "waiting_for_storage";
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1156,7 +1159,36 @@ function AdminAccounts() {
               </div>
             </div>
 
-            {migration.live && (
+            {migration.live?.completedFile && (
+              <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                  Completed file
+                </div>
+
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="min-w-0">
+                    <h3 className="break-words text-base font-semibold text-slate-950">
+                      {migration.live.completedFile.name || "Completed file"}
+                    </h3>
+                    <div className="mt-1 text-xs text-emerald-700">
+                      Completed
+                    </div>
+                  </div>
+
+                  <div className="text-left text-lg font-bold text-slate-950 sm:text-right">
+                    {formatBytes(
+                      migration.live.completedFile.bytesTransferred
+                    )}{" "}
+                    /{" "}
+                    {formatBytes(
+                      migration.live.completedFile.sizeBytes
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {migration.live && migrationIsActive && (
               <div className="mt-6 space-y-4">
                 {migration.live.currentFile && (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
@@ -1365,7 +1397,7 @@ function AdminAccounts() {
                     {Number(
                       migration.transferredFiles
                     ).toLocaleString()}{" "}
-                    files were migrated. The source account was not removed.
+                    files were migrated. The source account remains connected because this was a limited migration; each selected file is cleaned up only after its verified target mapping is durable.
                   </div>
                 ) : (
                   <div className="mt-2 text-sm font-normal">

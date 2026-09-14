@@ -1348,6 +1348,12 @@ async function finishMigrationIfComplete(
         WHEN counts.completed_count >= m.total_files THEN 'completed'
         ELSE m.status
       END,
+      current_file_id = CASE
+        WHEN counts.failed_count + counts.reconciliation_expired_count > 0
+          OR counts.completed_count >= m.total_files
+        THEN NULL
+        ELSE m.current_file_id
+      END,
       finished_at = CASE
         WHEN counts.failed_count + counts.reconciliation_expired_count > 0
           OR counts.completed_count >= m.total_files

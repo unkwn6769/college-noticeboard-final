@@ -37,6 +37,14 @@ export async function persistTargetFileId(
       UPDATE google_drive_account_migration_items
       SET
         target_file_id = $1,
+        target_account_id = COALESCE(
+          target_account_id,
+          (
+            SELECT target_account_id
+            FROM google_drive_account_migrations
+            WHERE id = google_drive_account_migration_items.migration_id
+          )
+        ),
         target_recovery_required = FALSE,
         transfer_phase = 'verifying',
         updated_at = NOW()
@@ -67,6 +75,14 @@ export async function markCompleted(
       SET
         status = 'completed',
         target_file_id = $1,
+        target_account_id = COALESCE(
+          target_account_id,
+          (
+            SELECT target_account_id
+            FROM google_drive_account_migrations
+            WHERE id = google_drive_account_migration_items.migration_id
+          )
+        ),
         reserved_bytes = 0,
         bytes_transferred = size_bytes,
         speed_bytes_per_second = 0,

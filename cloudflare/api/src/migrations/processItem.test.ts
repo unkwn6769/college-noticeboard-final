@@ -41,6 +41,8 @@ type Fixture = {
   sourceAccountId: string;
   targetAccountId: string;
   sourceFileId: string;
+  departmentSlug: string;
+  resourceName: string;
 };
 
 const fixtures: Fixture[] = [];
@@ -48,6 +50,8 @@ const fixtures: Fixture[] = [];
 async function createFixture(
   options: {
     targetFileId?: string | null;
+    resourceName?: string;
+    resourceSize?: number;
   } = {},
 ): Promise<Fixture> {
   const client = new Client({
@@ -70,6 +74,14 @@ async function createFixture(
 
   const sourceFileId =
     `processor-test-source-file-${crypto.randomUUID()}`;
+
+  const departmentSlug =
+    `processor-test-department-${crypto.randomUUID()}`;
+
+  const resourceName =
+    options.resourceName ?? "example.pdf";
+  const resourceSize =
+    options.resourceSize ?? 1234;
 
   const secret = process.env.TOKEN_ENCRYPTION_KEY!;
 
@@ -130,6 +142,67 @@ async function createFixture(
         ],
       );
     }
+
+    await client.query(
+      `
+      INSERT INTO departments (slug, name)
+      VALUES ($1, $2)
+      `,
+      [departmentSlug, departmentSlug],
+    );
+
+    const departmentResult = await client.query<{ id: number }>(
+      `
+      SELECT id
+      FROM departments
+      WHERE slug = $1
+      `,
+      [departmentSlug],
+    );
+
+    await client.query(
+      `
+      INSERT INTO resources (
+        department_id,
+        name,
+        type,
+        path,
+        url,
+        size,
+        storage_provider,
+        storage_key,
+        storage_status,
+        is_available
+      )
+      VALUES (
+        $1,
+        $2,
+        'file',
+        $3,
+        $3,
+        $5,
+        'google_drive',
+        $4,
+        'synced',
+        TRUE
+      )
+      `,
+      [
+        departmentResult.rows[0].id,
+        resourceName,
+        `/noticeboards/${departmentSlug}/${resourceName}`,
+        sourceFileId,
+        resourceSize,
+      ],
+    );
+
+    await client.query(
+      `
+      INSERT INTO google_drive_file_accounts (file_id, account_id)
+      VALUES ($1, $2)
+      `,
+      [sourceFileId, sourceAccountId],
+    );
 
     await client.query(
       `
@@ -195,6 +268,8 @@ async function createFixture(
       sourceAccountId,
       targetAccountId,
       sourceFileId,
+      departmentSlug,
+      resourceName,
     };
 
     fixtures.push(fixture);
@@ -260,6 +335,33 @@ async function cleanup(
       WHERE id = $1
       `,
       [fixture.migrationId],
+    );
+
+    await client.query(
+      `
+      DELETE FROM google_drive_file_accounts
+      WHERE account_id IN ($1, $2)
+      `,
+      [
+        fixture.sourceAccountId,
+        fixture.targetAccountId,
+      ],
+    );
+
+    await client.query(
+      `
+      DELETE FROM resources
+      WHERE path = $1
+      `,
+      [`/noticeboards/${fixture.departmentSlug}/${fixture.resourceName}`],
+    );
+
+    await client.query(
+      `
+      DELETE FROM departments
+      WHERE slug = $1
+      `,
+      [fixture.departmentSlug],
     );
 
     await client.query(
@@ -406,7 +508,10 @@ test("processor performs a Google-side copy and completes the item", async () =>
 });
 
 test("duplicate queue delivery does not perform a second copy", async () => {
-  const fixture = await createFixture();
+  const fixture = await createFixture({
+    resourceName: "duplicate-test.txt",
+    resourceSize: 20,
+  });
 
   const originalFetch = globalThis.fetch;
 
@@ -500,6 +605,7 @@ test("duplicate queue delivery does not perform a second copy", async () => {
 test("persisted target is verified without performing another copy", async () => {
   const fixture = await createFixture({
     targetFileId: "persisted-target",
+    resourceName: "already-copied.pdf",
   });
 
   const originalFetch = globalThis.fetch;
@@ -1003,7 +1109,10 @@ test("valid stale-lease recovery reconciles instead of copying again", async () 
 });
 
 test("processor completes through temporary-share Google copy", async () => {
-  const fixture = await createFixture();
+  const fixture = await createFixture({
+    resourceName: "large-document.pdf",
+    resourceSize: 1048576,
+  });
 
   const originalFetch = globalThis.fetch;
 

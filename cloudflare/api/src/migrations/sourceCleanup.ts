@@ -2,6 +2,7 @@ import { getGoogleDriveAccount } from "../google/accounts";
 import { deleteFile, getFile, DriveApiError } from "../google/drive";
 import { getDriveAccessToken } from "../google/oauth";
 import { withDatabase } from "../db/postgres";
+import { ensureTargetMapping } from "./targetMapping";
 
 type CleanupResult =
   | {
@@ -46,7 +47,7 @@ export async function retrySourceCleanup(
           i.migration_id,
           i.source_file_id,
           i.target_file_id,
-          i.target_account_id,
+          COALESCE(i.target_account_id, m.target_account_id) AS target_account_id,
           i.source_delete_status,
           m.source_account_id
         FROM google_drive_account_migration_items i
@@ -146,6 +147,13 @@ export async function retrySourceCleanup(
           "Target file does not belong to this migration item; source deletion refused",
       };
     }
+
+    await ensureTargetMapping(env, {
+      itemId: item.id,
+      targetFileId: item.target_file_id,
+      targetName: targetFile.name,
+      targetSize: targetFile.size,
+    });
 
     const mappingExists = await withDatabase(env, async (client) => {
       const result = await client.query(

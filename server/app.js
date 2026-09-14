@@ -2167,6 +2167,62 @@ app.get(
   requireAdmin,
   async (req, res) => {
     try {
+      await pool.query(
+        `
+          WITH counts AS (
+            SELECT
+              COUNT(*) FILTER (
+                WHERE status = 'completed'
+              )::bigint AS completed_count,
+              COUNT(*) FILTER (
+                WHERE status = 'failed'
+              )::bigint AS failed_count,
+              COUNT(*) FILTER (
+                WHERE status = 'reconciliation_expired'
+              )::bigint AS reconciliation_expired_count
+            FROM google_drive_account_migration_items
+            WHERE migration_id = $1
+          )
+          UPDATE google_drive_account_migrations m
+          SET
+            completed_files = counts.completed_count,
+            failed_files =
+              counts.failed_count +
+              counts.reconciliation_expired_count,
+            status = CASE
+              WHEN counts.failed_count +
+                   counts.reconciliation_expired_count > 0
+                THEN 'failed'
+              WHEN counts.completed_count >= m.total_files
+                THEN 'completed'
+              ELSE m.status
+            END,
+            current_file_id = CASE
+              WHEN counts.failed_count +
+                   counts.reconciliation_expired_count > 0
+                OR counts.completed_count >= m.total_files
+                THEN NULL
+              ELSE m.current_file_id
+            END,
+            finished_at = CASE
+              WHEN counts.failed_count +
+                   counts.reconciliation_expired_count > 0
+                OR counts.completed_count >= m.total_files
+                THEN COALESCE(m.finished_at, NOW())
+              ELSE m.finished_at
+            END,
+            updated_at = NOW()
+          FROM counts
+          WHERE m.id = $1
+            AND m.status IN (
+              'pending',
+              'running',
+              'waiting_for_storage'
+            )
+        `,
+        [req.params.id],
+      );
+
       const result = await pool.query(
         `
         SELECT
@@ -2224,28 +2280,32 @@ app.get(
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.id
             END
           ) AS current_item_id,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.size_bytes
             END
           ) AS current_file_size,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.bytes_transferred
             END
           ) AS current_file_bytes,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.speed_bytes_per_second
             END
           ) AS current_file_speed_bytes_per_second,
@@ -2257,31 +2317,62 @@ app.get(
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.transfer_phase
             END
           ) AS current_file_phase,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.started_at
             END
           ) AS current_file_started_at,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN r.name
             END
           ) AS current_file_name,
 
           MAX(
             CASE
-              WHEN i.source_file_id = m.current_file_id
+              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
+                AND i.source_file_id = m.current_file_id
               THEN i.target_account_id
             END
-          ) AS current_target_account_id
+          ) AS current_target_account_id,
+
+          MAX(
+            CASE WHEN i.status = 'completed' THEN i.id END
+          ) AS completed_item_id,
+
+          MAX(
+            CASE WHEN i.status = 'completed' THEN r.name END
+          ) AS completed_file_name,
+
+          MAX(
+            CASE WHEN i.status = 'completed' THEN i.size_bytes END
+          ) AS completed_file_size,
+
+          MAX(
+            CASE WHEN i.status = 'completed' THEN i.bytes_transferred END
+          ) AS completed_file_bytes,
+
+          MAX(
+            CASE WHEN i.status = 'completed' THEN i.target_file_id END
+          ) AS completed_target_file_id,
+
+          MAX(
+            CASE
+              WHEN i.status = 'completed'
+              THEN COALESCE(i.target_account_id, m.target_account_id)
+            END
+          ) AS completed_target_account_id
 
         FROM google_drive_account_migrations m
 
@@ -2558,7 +2649,8 @@ app.get(
             migrationElapsedSeconds:
               migrationElapsedSeconds,
 
-            currentFile: {
+            currentFile: row.current_item_id
+              ? {
               id: row.current_item_id,
               name: row.current_file_name,
               phase: row.current_file_phase,
@@ -2580,7 +2672,20 @@ app.get(
 
               targetAccountId:
                 row.current_target_account_id,
-            },
+                }
+              : null,
+
+            completedFile: row.completed_item_id
+              ? {
+                  id: row.completed_item_id,
+                  name: row.completed_file_name,
+                  sizeBytes: String(row.completed_file_size ?? 0),
+                  bytesTransferred: String(row.completed_file_bytes ?? 0),
+                  targetFileId: row.completed_target_file_id,
+                  targetAccountId: row.completed_target_account_id,
+                  status: "completed",
+                }
+              : null,
           },
         },
       });

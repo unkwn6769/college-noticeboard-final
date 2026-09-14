@@ -31,6 +31,7 @@ import {
 import {
   reconcileTarget,
 } from "./reconciliation";
+import { ensureTargetMapping } from "./targetMapping";
 
 const MAX_TRANSIENT_RETRIES = 3;
 const RETRY_DELAY_MS = 3_000;
@@ -297,6 +298,13 @@ export async function processMigrationItem(
         );
       }
 
+      await ensureTargetMapping(env, {
+        itemId,
+        leaseGeneration,
+        targetFileId: persistedTarget.id,
+        targetName: persistedTarget.name,
+        targetSize: persistedTarget.size,
+      });
       await markCompleted(
         env,
         itemId,
@@ -414,6 +422,13 @@ export async function processMigrationItem(
           );
         }
 
+        await ensureTargetMapping(env, {
+          itemId,
+          leaseGeneration,
+          targetFileId: recoveredTargetFileId,
+          targetName: reconciliation.targetFile.name,
+          targetSize: reconciliation.targetFile.size,
+        });
         await markCompleted(
           env,
           itemId,
@@ -498,6 +513,14 @@ export async function processMigrationItem(
       leaseGeneration,
       targetFileId,
     );
+
+    await ensureTargetMapping(env, {
+      itemId,
+      leaseGeneration,
+      targetFileId,
+      targetName: targetFile.name,
+      targetSize: targetFile.size,
+    });
 
     await markCompleted(
       env,

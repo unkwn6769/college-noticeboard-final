@@ -2237,7 +2237,7 @@ app.get(
           m.failed_files,
           m.current_file_id,
           m.error_message,
-          m.started_at,
+          COALESCE(m.started_at, m.created_at) AS started_at,
           m.finished_at,
           m.created_at,
           m.updated_at,
@@ -2671,6 +2671,7 @@ app.get(
               id: row.current_item_id,
               name: row.current_file_name,
               status: row.current_file_status,
+              startedAt: row.current_file_started_at,
               phase: row.current_file_phase,
 
               sizeBytes:

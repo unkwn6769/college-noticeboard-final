@@ -8,6 +8,10 @@ import {
   X,
 } from "lucide-react";
 import { API_URL } from "../../config/api";
+import {
+  createTelemetrySample,
+  deriveMigrationTelemetry,
+} from "./migrationTelemetry";
 
 const ACTIVE_MIGRATION_KEY =
   "college-noticeboard-active-migration";
@@ -149,10 +153,12 @@ function AdminAccounts() {
   const migrationPollGenerationRef = useRef(0);
   const migrationTelemetryRef = useRef({
     migrationId: null,
-    sampledAt: 0,
+    timestamp: 0,
     transferredBytes: 0,
     currentFileId: null,
     currentFileBytes: 0,
+    overallSpeedBytesPerSecond: null,
+    currentFileSpeedBytesPerSecond: null,
   });
 
   function stopMigrationPolling() {
@@ -442,154 +448,47 @@ function AdminAccounts() {
     }
 
     const now = Date.now();
-    const live = latest.live;
-    const currentFile = live.currentFile;
-
-    const totalBytes = Number(
-      live.transferredBytes ?? 0
-    );
-
-    let overallSpeed =
-      Number(
-        live.overallSpeedBytesPerSecond ?? 0
-      );
-
-    let totalEta =
-      live.totalEtaSeconds ?? null;
-
-    let currentFileSpeed =
-      Number(
-        currentFile?.speedBytesPerSecond ?? 0
-      );
-
-    let currentFileEta =
-      currentFile?.etaSeconds ?? null;
-
     const previous =
       migrationTelemetryRef.current;
-
-    if (
-      previous.migrationId === latest.id &&
-      previous.sampledAt > 0
-    ) {
-      const elapsed =
-        (now - previous.sampledAt) /
-        1000;
-
-      if (
-        elapsed >= 0.5 &&
-        elapsed <= 10
-      ) {
-        const byteDelta =
-          totalBytes -
-          previous.transferredBytes;
-
-        if (byteDelta > 0) {
-          overallSpeed =
-            byteDelta / elapsed;
-        }
-
-        const currentFileBytes =
-          Number(
-            currentFile?.bytesTransferred ??
-              0
-          );
-
-        if (
-          currentFile?.id ===
-            previous.currentFileId &&
-          currentFileBytes >=
-            previous.currentFileBytes &&
-          currentFileBytes >
-            previous.currentFileBytes
-        ) {
-          currentFileSpeed =
-            (
-              currentFileBytes -
-              previous.currentFileBytes
-            ) / elapsed;
-        }
-      }
-    }
-
-    const totalSizeBytes = Number(
-      live.totalBytes ?? 0
-    );
-
-    const remainingTotalBytes =
-      Math.max(
-        0,
-        totalSizeBytes - totalBytes
+    const priorSample =
+      previous.migrationId === latest.id
+        ? previous
+        : null;
+    const derived =
+      deriveMigrationTelemetry(
+        latest,
+        priorSample,
+        now,
+      );
+    const sample =
+      createTelemetrySample(
+        latest,
+        now,
       );
 
-    if (
-      latest.status === "completed"
-    ) {
-      totalEta = 0;
-    } else if (
-      overallSpeed > 0 &&
-      remainingTotalBytes > 0
-    ) {
-      totalEta =
-        remainingTotalBytes /
-        overallSpeed;
-    } else if (
-      remainingTotalBytes === 0 &&
-      latest.status === "running"
-    ) {
-      totalEta = 0;
-    }
-
-    if (
-      currentFile &&
-      currentFileSpeed > 0
-    ) {
-      const fileSize =
-        Number(
-          currentFile.sizeBytes ?? 0
-        );
-
-      const fileBytes =
-        Number(
-          currentFile.bytesTransferred ??
-            0
-        );
-
-      currentFileEta =
-        Math.max(
-          0,
-          fileSize - fileBytes
-        ) / currentFileSpeed;
-    }
-
     migrationTelemetryRef.current = {
-      migrationId: latest.id,
-      sampledAt: now,
-      transferredBytes: totalBytes,
-      currentFileId:
-        currentFile?.id ?? null,
-      currentFileBytes: Number(
-        currentFile?.bytesTransferred ??
-          0
-      ),
+      ...sample,
+      overallSpeedBytesPerSecond:
+        derived.overallSpeedBytesPerSecond,
+      currentFileSpeedBytesPerSecond:
+        derived.currentFile
+          ?.speedBytesPerSecond ?? null,
     };
 
     return {
       ...latest,
       live: {
-        ...live,
+        ...latest.live,
         overallSpeedBytesPerSecond:
-          overallSpeed,
-        totalEtaSeconds: totalEta,
-        currentFile: currentFile
-          ? {
-              ...currentFile,
-              speedBytesPerSecond:
-                currentFileSpeed,
-              etaSeconds:
-                currentFileEta,
-            }
-          : currentFile,
+          derived.overallSpeedBytesPerSecond,
+        overallSpeedMiBPerSecond:
+          derived.overallSpeedMiBPerSecond,
+        totalEtaSeconds:
+          derived.totalEtaSeconds,
+        migrationElapsedSeconds:
+          derived.migrationElapsedSeconds,
+        currentFile:
+          derived.currentFile,
       },
     };
   }

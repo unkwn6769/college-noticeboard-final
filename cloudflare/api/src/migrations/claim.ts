@@ -195,7 +195,7 @@ export async function claimItem(
 
   reserved_bytes = 0,
 
-  started_at = NOW(),
+  started_at = COALESCE(started_at, NOW()),
   finished_at = NULL,
 
   bytes_transferred =
@@ -211,7 +211,14 @@ export async function claimItem(
       ELSE 0
     END,
 
-  speed_bytes_per_second = 0,
+  speed_bytes_per_second =
+    CASE
+      WHEN status = 'pending'
+        AND bytes_transferred = 0
+        AND upload_bytes_committed = 0
+        THEN 0
+      ELSE speed_bytes_per_second
+    END,
 
   target_recovery_required =
     CASE

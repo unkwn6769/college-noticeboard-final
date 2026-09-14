@@ -55,12 +55,6 @@ function encryptTestToken(value) {
 }
 
 await ensureMigrationSafetySchema();
-await pool.query(`
-  ALTER TABLE google_drive_account_migration_items
-    ADD COLUMN IF NOT EXISTS bytes_transferred BIGINT NOT NULL DEFAULT 0;
-  ALTER TABLE google_drive_account_migration_items
-    ADD COLUMN IF NOT EXISTS transfer_phase TEXT NOT NULL DEFAULT 'pending';
-`);
 
 async function createFenceFixture({
   itemId = `migration-item-${crypto.randomUUID()}`,
@@ -698,6 +692,53 @@ test("new worker claim gets a newer generation after stale recovery", async (t) 
   assert.ok(claimed);
   assert.ok(Number(claimed.lease_generation) > fixture.leaseGeneration);
   assert.equal(claimed.id, fixture.itemId);
+});
+
+test("reclaimed work fences the stale worker and proceeds with a new claim", async (t) => {
+  const fixture = await createFenceFixture({ leaseGeneration: 41 });
+  t.after(() => cleanupFenceFixture(fixture));
+
+  await pool.query(
+    `
+      UPDATE google_drive_account_migration_items
+      SET status = 'running',
+          lease_expires_at = NOW() - INTERVAL '1 minute',
+          transfer_phase = 'uploading',
+          bytes_transferred = 128,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [fixture.itemId],
+  );
+
+  const recovered = await recoverStaleRunningItems();
+  assert.ok(recovered.some((item) => item.id === fixture.itemId));
+
+  await assert.rejects(
+    () => updateItemProgress(fixture.itemId, fixture.leaseGeneration, 256n, "uploading"),
+    (error) => error instanceof FencedWorkerError,
+  );
+
+  const claimed = await claimNextItem(fixture.migrationId);
+  assert.equal(claimed.id, fixture.itemId);
+  assert.equal(Number(claimed.lease_generation), fixture.leaseGeneration + 2);
+
+  await updateItemProgress(
+    fixture.itemId,
+    claimed.lease_generation,
+    512n,
+    "verifying",
+  );
+  const progressed = await pool.query(
+    `
+      SELECT bytes_transferred, transfer_phase
+      FROM google_drive_account_migration_items
+      WHERE id = $1
+    `,
+    [fixture.itemId],
+  );
+  assert.equal(progressed.rows[0].bytes_transferred, "512");
+  assert.equal(progressed.rows[0].transfer_phase, "verifying");
 });
 
 test("reconciling items respect next_retry_at before being reclaimed", async (t) => {

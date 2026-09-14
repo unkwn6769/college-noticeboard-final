@@ -11,25 +11,7 @@
     "FRONTEND_URL": "https://college-noticeboard-final.pages.dev",
     "ALLOWED_ORIGINS": "https://college-noticeboard-final.pages.dev",
     "GOOGLE_DRIVE_HTTP2": "false",
-    "NODE_ENV": "production",
-    "MIGRATION_QUEUE_CONCURRENCY": "10"
-  },
-  "queues": {
-    "consumers": [
-      {
-        "queue": "college-noticeboard-migrations",
-        "max_batch_size": 100,
-        "max_batch_timeout": 1,
-        "max_retries": 100,
-        "dead_letter_queue": "college-noticeboard-migrations-dlq"
-      }
-    ],
-    "producers": [
-      {
-        "binding": "MIGRATION_QUEUE",
-        "queue": "college-noticeboard-migrations"
-      }
-    ]
+    "NODE_ENV": "production"
   },
   "upload_source_maps": true,
   "hyperdrive": [

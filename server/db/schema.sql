@@ -247,6 +247,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_google_drive_account_migrations_active_sou
     ON google_drive_account_migrations(source_account_id)
     WHERE status IN ('pending', 'running', 'waiting_for_storage');
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS migration_scheduler_leases (
+    id INTEGER PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS google_drive_account_migration_items (
     id TEXT PRIMARY KEY,
     migration_id TEXT NOT NULL
@@ -257,6 +269,8 @@ CREATE TABLE IF NOT EXISTS google_drive_account_migration_items (
     target_file_id TEXT,
     target_account_id TEXT,
     size_bytes BIGINT NOT NULL DEFAULT 0,
+    bytes_transferred BIGINT NOT NULL DEFAULT 0,
+    transfer_phase TEXT,
 
     lease_generation BIGINT NOT NULL DEFAULT 0,
     lease_expires_at TIMESTAMPTZ,
@@ -294,6 +308,9 @@ CREATE INDEX IF NOT EXISTS idx_google_drive_account_migration_items_migration
 
 CREATE INDEX IF NOT EXISTS idx_google_drive_account_migration_items_status
     ON google_drive_account_migration_items(migration_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_gd_migration_items_due
+    ON google_drive_account_migration_items(migration_id, status, next_retry_at, created_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_gd_migration_items_quota_reservations
     ON google_drive_account_migration_items(target_account_id, status, reserved_bytes)

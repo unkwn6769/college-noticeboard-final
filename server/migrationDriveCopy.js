@@ -6,8 +6,8 @@
 //      accelerating, temporarily grant the target read access from the source
 //      account, then retry the Google-side copy.
 //   3. Remove only the temporary permission we created.
-//   4. Preserve Render streaming as the safe fallback for small files,
-//      restricted files, or permission failures.
+//   4. Never stream file bytes through the application. Unavailable copies
+//      are reconciled or retried by the durable migration worker.
 
 const DEFAULT_SHARE_THRESHOLD_BYTES = 512 * 1024;
 const SHARE_COPY_RETRY_DELAYS_MS = [50, 125, 250, 400];
@@ -233,7 +233,7 @@ export async function tryServerSideDriveCopy({
   workerNumber,
   log,
   enabled =
-    String(process.env.MIGRATION_SERVER_SIDE_COPY || "").toLowerCase() ===
+    String(process.env.MIGRATION_SERVER_SIDE_COPY ?? "true").toLowerCase() ===
     "true",
   markItemReconcilingFn,
   reconciliationDeadlineMs = 10 * 60 * 1000,
@@ -243,7 +243,7 @@ export async function tryServerSideDriveCopy({
   ),
 }) {
   if (!enabled) {
-    return { kind: "fallback", reason: "server-side copy disabled" };
+    return { kind: "unavailable", reason: "server-side copy disabled" };
   }
 
   ensureHeartbeatStillValid();
@@ -264,6 +264,7 @@ export async function tryServerSideDriveCopy({
       sourceMetadata.name
     );
   } catch (error) {
+    let copyError = error;
     let status = getDriveErrorStatus(error);
 
     if (status === 404) {
@@ -306,7 +307,7 @@ export async function tryServerSideDriveCopy({
             role: temporaryShareRole,
           });
         } catch (shareCopyError) {
-          error = shareCopyError;
+          copyError = shareCopyError;
           status = getDriveErrorStatus(shareCopyError);
         }
       }
@@ -319,12 +320,9 @@ export async function tryServerSideDriveCopy({
           : sourceMetadata.copyRequiresWriterPermission === true && !writerShareEnabled
             ? "copy restriction requires temporary writer access, which is disabled"
             : "file below temporary-share threshold";
-        log(
-          `Server-side copy unavailable for ${sourceMetadata.name}; ` +
-            `${reason}; falling back to Render streaming (404)`
-        );
+        log(`Server-side copy unavailable for ${sourceMetadata.name}: ${reason}`);
         return {
-          kind: "fallback",
+          kind: "unavailable",
           reason: "target cannot access source (404)",
         };
       }
@@ -332,12 +330,9 @@ export async function tryServerSideDriveCopy({
 
     if (!copyResponse) {
       if ([400, 403].includes(status)) {
-        log(
-          `Server-side copy unavailable for ${sourceMetadata.name}; ` +
-            `falling back to Render streaming (${status})`
-        );
+        log(`Server-side copy unavailable for ${sourceMetadata.name} (${status})`);
         return {
-          kind: "fallback",
+          kind: "unavailable",
           reason: `target cannot access source (${status})`,
         };
       }
@@ -352,7 +347,7 @@ export async function tryServerSideDriveCopy({
       if (ambiguous) {
         const reason =
           `Google-side copy outcome is uncertain for ${item.id}: ` +
-          `${error instanceof Error ? error.message : String(error)}`;
+          `${copyError instanceof Error ? copyError.message : String(copyError)}`;
 
         await markItemReconcilingFn(
           item.id,
@@ -371,7 +366,7 @@ export async function tryServerSideDriveCopy({
         };
       }
 
-      throw error;
+      throw copyError;
     }
   }
 

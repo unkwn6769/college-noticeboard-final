@@ -1,32 +1,27 @@
 # College Noticeboard — Cloudflare Deployment
 
-This release uses a Cloudflare-native application path:
+This release uses a direct PostgreSQL migration path:
 
 ```text
 Browser
   -> Cloudflare Pages (React/Vite)
-  -> Cloudflare Worker (Express API)
+  -> Cloudflare Worker (Express control-plane API)
      -> Hyperdrive -> Supabase/PostgreSQL
-     -> Google APIs
-
-Admin migration actions
-  -> Cloudflare Queue
-  -> same Worker queue consumer
-  -> Google Drive / Hyperdrive
+  -> GitHub Actions disposable runner
+     -> direct PostgreSQL pool
+     -> Google Drive API
 ```
 
-The Node server remains available for local development and compatibility testing. It is not required as a separate production service for the Cloudflare deployment.
+Cloudflare Workers are control-plane only. Migration work runs on a disposable
+GitHub Actions runner and never uses Queue or Hyperdrive; Hyperdrive remains
+only on the HTTP control-plane database path.
 
-## Cloudflare resources
+## Required resources
 
 The Worker configuration expects these existing resources:
 
-- Worker: `college-noticeboard-api`
-- Queue: `college-noticeboard-migrations`
-- Hyperdrive: `143a18762ebe484186882c4e53d9bee8`
-- Pages project: `college-noticeboard`
-
-For a different Cloudflare account, replace the Hyperdrive/Queue resources in `cloudflare/api/wrangler.jsonc` with resources owned by that account.
+- PostgreSQL database reachable from the Worker and GitHub Actions.
+- Google OAuth credentials and encrypted token storage configuration.
 
 ## First deployment
 
@@ -70,7 +65,8 @@ The script uploads only these secret values:
 - `DRIVE_ACCOUNT_GOOGLE_CLIENT_SECRET`
 - `DRIVE_ACCOUNT_GOOGLE_REDIRECT_URI`
 
-`DATABASE_URL` is not uploaded to the Worker. Worker database access uses Hyperdrive. The Node runtime still uses `DATABASE_URL` locally.
+`DATABASE_URL` is supplied to the Node service and the migration workflow as a
+GitHub Actions secret. It is never committed or exposed to the Worker.
 
 ## Public configuration
 
@@ -83,13 +79,11 @@ The script uploads only these secret values:
 
 ## Migration execution
 
-Creating a migration inserts all migration items transactionally, then queues a `migration_kickoff` message. The Worker seeds pending items into Queue batches of up to 100 messages.
-
-Normal queue messages use the existing `{ migrationId, itemId }` contract. Source-cleanup retries use a separate `{ type: "source_cleanup_retry", itemId }` contract.
-
-The migration engine keeps its durable PostgreSQL retry/reconciliation state. Queue retries are only the delivery mechanism. Source cleanup performs the target-file, migration-marker, and application-mapping safety checks before deleting a source.
-
-Cloudflare Queues currently allow up to 100 messages per `sendBatch`, up to 100 messages per consumer batch, and automatic consumer concurrency scaling. Queue operations on Workers Free are subject to the current included-operation quota, so large migrations can exceed a Free-plan daily quota even though the deployment itself is card-free.
+Creating a migration writes durable PostgreSQL state. The scheduler acquires a
+database lease, claims fenced items with bounded adaptive concurrency, and
+retries due work. Stale leases are recovered on restart. SIGTERM/SIGINT waits
+for active work and releases the lease. `schema_migrations` applies additive
+SQL migrations before the scheduler starts.
 
 ## Validation
 

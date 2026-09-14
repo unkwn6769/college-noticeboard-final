@@ -5,8 +5,14 @@ import {
   finalizeCancellationIfIdle,
 } from "./migrationWorker.js";
 
-const DEFAULT_FILE_WORKERS = 60;
-const MAX_FILE_WORKERS_PER_MIGRATION = 60;
+const DEFAULT_FILE_WORKERS = Math.min(
+  60,
+  Math.max(1, Number(process.env.MIGRATION_FILE_WORKERS || 1)),
+);
+const MAX_FILE_WORKERS_PER_MIGRATION = Math.max(
+  DEFAULT_FILE_WORKERS,
+  Math.min(60, Number(process.env.MIGRATION_FILE_WORKERS_MAX || 60)),
+);
 const DEFAULT_BATCH_SIZE = DEFAULT_FILE_WORKERS;
 const MAX_BATCH_SIZE = MAX_FILE_WORKERS_PER_MIGRATION;
 const MAX_RESULT_SAMPLES = 100;
@@ -55,11 +61,14 @@ async function runFileWorker(
   sharedState
 ) {
   while (true) {
+    const startedAt = Date.now();
     const result = await migrateOneItem(
       migrationId,
       workerNumber,
       workerCount
     );
+    const latencyMs = Date.now() - startedAt;
+    sharedState.totalLatencyMs += latencyMs;
 
     if (
       !result ||
@@ -69,6 +78,12 @@ async function runFileWorker(
     }
 
     sharedState.processed++;
+    if (result.status === "retrying") sharedState.retryCount++;
+    if (/rate.?limit|429|quota/i.test(
+      `${result.reason || ""} ${result.error || ""} ${result.message || ""}`,
+    )) {
+      sharedState.rateLimitCount++;
+    }
     addResultSample(sharedState.results, result);
 
     if (
@@ -143,15 +158,19 @@ export async function runMigrationBatch(
     };
   }
 
-  const workerCount = Math.min(
-    batchSize,
-    MAX_FILE_WORKERS_PER_MIGRATION
-  );
+  // Adapt to the configured database pool while retaining a hard upper bound.
+  // This prevents a large Drive fan-out from exhausting PostgreSQL connections.
+  const poolBound = Math.max(1, Number(process.env.DB_POOL_MAX || 12) * 4);
+  const workerCount = Math.min(batchSize, MAX_FILE_WORKERS_PER_MIGRATION, poolBound);
 
   const sharedState = {
     processed: 0,
     results: [],
     deferredStorage: false,
+    startedAt: Date.now(),
+    totalLatencyMs: 0,
+    retryCount: 0,
+    rateLimitCount: 0,
   };
 
   /*
@@ -207,5 +226,18 @@ export async function runMigrationBatch(
     results: sharedState.results,
     summary,
     deferredStorage: sharedState.deferredStorage,
+    metrics: {
+      latencyMs: sharedState.processed
+        ? sharedState.totalLatencyMs / sharedState.processed
+        : 0,
+      throughput: sharedState.processed
+        ? sharedState.processed / Math.max(0.001, (Date.now() - sharedState.startedAt) / 1000)
+        : 0,
+      retryRate: sharedState.processed
+        ? sharedState.retryCount / sharedState.processed
+        : 0,
+      rateLimited: sharedState.rateLimitCount > 0,
+      rateLimitCount: sharedState.rateLimitCount,
+    },
   };
 }

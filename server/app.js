@@ -4,7 +4,6 @@ import cors from "cors";
 import contentDisposition from "content-disposition";
 import crypto from "node:crypto";
 import { pool } from "./db/database.js";
-import { getRuntimeQueue } from "./runtimeContext.js";
 
 import {
   getGoogleAuthorizationUrl,
@@ -1482,14 +1481,6 @@ app.post(
         return res.status(400).json({ error: "Migration item id is required" });
       }
 
-      const queue = getRuntimeQueue();
-
-      if (!queue) {
-        return res.status(503).json({
-          error: "Migration queue is unavailable",
-        });
-      }
-
       const eligibility = await pool.query(
         `
           SELECT 1
@@ -1509,13 +1500,8 @@ app.post(
         });
       }
 
-      await queue.send({
-        type: "source_cleanup_retry",
-        itemId,
-      });
-
       const result = {
-        status: "queued",
+        status: "scheduled",
         itemId,
       };
 
@@ -1525,7 +1511,7 @@ app.post(
         eventType: ACTIVITY_EVENT_TYPES.SOURCE_CLEANUP_RETRY,
         entityType: "migration_item",
         entityId: itemId,
-        description: `Queued source cleanup retry for migration item ${itemId}`,
+        description: `Scheduled source cleanup retry for migration item ${itemId}`,
         metadata: { result },
       });
 
@@ -2015,14 +2001,6 @@ app.post(
 
       await client.query("COMMIT");
 
-      const migrationQueue = getRuntimeQueue();
-      if (migrationQueue) {
-        await migrationQueue.send({
-          type: "migration_kickoff",
-          migrationId,
-        });
-      }
-
       await logAdminActivity({
         req,
         admin: req.admin,
@@ -2190,24 +2168,40 @@ app.get(
               counts.failed_count +
               counts.reconciliation_expired_count,
             status = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                THEN 'failed'
               WHEN counts.completed_count >= m.total_files
                 THEN 'completed'
+              WHEN counts.failed_count +
+                   counts.reconciliation_expired_count > 0
+                   AND
+                   counts.completed_count +
+                   counts.failed_count +
+                   counts.reconciliation_expired_count >= m.total_files
+                THEN 'failed'
               ELSE m.status
             END,
             current_file_id = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                OR counts.completed_count >= m.total_files
+              WHEN counts.completed_count >= m.total_files
+                OR (
+                  counts.failed_count +
+                  counts.reconciliation_expired_count > 0
+                  AND
+                  counts.completed_count +
+                  counts.failed_count +
+                  counts.reconciliation_expired_count >= m.total_files
+                )
                 THEN NULL
               ELSE m.current_file_id
             END,
             finished_at = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                OR counts.completed_count >= m.total_files
+              WHEN counts.completed_count >= m.total_files
+                OR (
+                  counts.failed_count +
+                  counts.reconciliation_expired_count > 0
+                  AND
+                  counts.completed_count +
+                  counts.failed_count +
+                  counts.reconciliation_expired_count >= m.total_files
+                )
                 THEN COALESCE(m.finished_at, NOW())
               ELSE m.finished_at
             END,
@@ -2764,14 +2758,6 @@ app.post(
   requireAdmin,
   async (req, res) => {
     const migrationId = String(req.params.id || "").trim();
-    const migrationQueue = getRuntimeQueue();
-
-    if (!migrationQueue) {
-      return res.status(503).json({
-        error: "Migration queue is unavailable",
-      });
-    }
-
     try {
       const result = await pool.query(
         `
@@ -2797,31 +2783,22 @@ app.post(
         });
       }
 
-      await migrationQueue.sendBatch(
-        result.rows.map((item) => ({
-          body: {
-            migrationId,
-            itemId: item.id,
-          },
-        })),
-      );
-
       await logAdminActivity({
         req,
-        action: "migration_resume_queued",
+        eventType: ACTIVITY_EVENT_TYPES.MIGRATION_RESUMED,
         entityType: "migration",
         entityId: migrationId,
-        description: `Queued ${result.rows.length} resumable migration items`,
+        description: `Scheduled ${result.rows.length} resumable migration items`,
       });
 
       return res.json({
         migrationId,
-        queuedItems: result.rows.length,
+        scheduledItems: result.rows.length,
       });
     } catch (error) {
       console.error("Admin migration resume failed:", error);
       return res.status(500).json({
-        error: "Failed to queue resumable migration items",
+        error: "Failed to schedule resumable migration items",
       });
     }
   },

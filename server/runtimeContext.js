@@ -3,18 +3,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 const runtimeStorage = new AsyncLocalStorage();
 
 export function runWithRuntimeContext(runtimeEnv, fn) {
-  const context = {
-    env: runtimeEnv,
-    client: null,
-  };
-
+  const context = { env: runtimeEnv, client: null };
   return runtimeStorage.run(context, async () => {
     try {
       return await fn();
     } finally {
       if (context.client) {
         await context.client.end().catch(() => {});
-        context.client = null;
       }
     }
   });
@@ -22,9 +17,4 @@ export function runWithRuntimeContext(runtimeEnv, fn) {
 
 export function getRuntimeContext() {
   return runtimeStorage.getStore() ?? null;
-}
-
-export function getRuntimeQueue() {
-  const context = getRuntimeContext();
-  return context?.env?.MIGRATION_QUEUE ?? null;
 }

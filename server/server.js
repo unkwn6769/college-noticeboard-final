@@ -1,10 +1,9 @@
 import {
-  pool,
-  ensureMigrationPerformanceIndexes,
-  ensureMigrationSafetySchema,
   ensureAdminManagementSchema,
   ensureActivityLogSchema,
+  closeDatabase,
 } from "./db/database.js";
+import { runSchemaMigrations } from "./db/migrate.js";
 
 import { ensureQuotaSnapshotSchema } from "./storage/storageQuota.js";
 
@@ -21,6 +20,14 @@ const httpServer = app.listen(PORT, "0.0.0.0", async () => {
   console.log(
     `Backend running on port ${PORT}`
   );
+
+  try {
+    await runSchemaMigrations();
+  } catch (error) {
+    console.error("Failed to apply schema migrations:", error);
+    httpServer.close();
+    return;
+  }
 
   try {
     await ensureAdminManagementSchema();
@@ -41,24 +48,6 @@ const httpServer = app.listen(PORT, "0.0.0.0", async () => {
     await ensureQuotaSnapshotSchema();
   } catch (error) {
     console.error("Failed to ensure storage quota schema:", error);
-  }
-
-  try {
-    await ensureMigrationSafetySchema();
-  } catch (error) {
-    console.error(
-      "Failed to ensure migration safety schema:",
-      error
-    );
-  }
-
-  try {
-    await ensureMigrationPerformanceIndexes();
-  } catch (error) {
-    console.error(
-      "Failed to ensure migration performance indexes:",
-      error
-    );
   }
 
   startMigrationScheduler().catch(
@@ -95,7 +84,7 @@ async function shutdown(signal) {
     });
 
     try {
-      await pool.end();
+      await closeDatabase();
     } catch (error) {
       console.error(
         "[SERVER] Failed to close PostgreSQL pool:",

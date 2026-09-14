@@ -3,12 +3,10 @@
 // Runtime types generated with workerd@1.20260911.1 2026-09-11 nodejs_compat
 interface __BaseEnv_Env {
 	HYPERDRIVE: Hyperdrive;
-	MIGRATION_QUEUE: Queue;
 	FRONTEND_URL: "https://college-noticeboard-final.pages.dev";
 	ALLOWED_ORIGINS: "https://college-noticeboard-final.pages.dev";
 	GOOGLE_DRIVE_HTTP2: "false";
 	NODE_ENV: "production";
-	MIGRATION_QUEUE_CONCURRENCY: "10";
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -21,7 +19,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "FRONTEND_URL" | "ALLOWED_ORIGINS" | "GOOGLE_DRIVE_HTTP2" | "NODE_ENV" | "MIGRATION_QUEUE_CONCURRENCY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "FRONTEND_URL" | "ALLOWED_ORIGINS" | "GOOGLE_DRIVE_HTTP2" | "NODE_ENV">> {}
 }
 
 // Begin runtime types

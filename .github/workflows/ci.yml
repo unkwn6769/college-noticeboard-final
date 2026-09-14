@@ -55,7 +55,7 @@ jobs:
       - run: npm run lint
       - run: npm --prefix cloudflare/api ci
       - name: Typecheck Worker
-        run: npm --prefix cloudflare/api exec tsc -- -p tsconfig.json --noEmit
+        run: cd cloudflare/api && npx tsc -p tsconfig.json --noEmit
       - name: Run database-independent Worker tests
         working-directory: cloudflare/api
         run: node --import tsx --test src/auth/encryption.test.ts src/google/drive.test.ts src/google/driveCopy.test.ts src/google/errors.test.ts src/google/resumableUpload.test.ts

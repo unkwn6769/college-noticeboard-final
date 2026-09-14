@@ -2237,7 +2237,11 @@ app.get(
           m.failed_files,
           m.current_file_id,
           m.error_message,
-          COALESCE(m.started_at, m.created_at) AS started_at,
+          COALESCE(
+            m.started_at,
+            MIN(i.started_at),
+            m.created_at
+          ) AS started_at,
           m.finished_at,
           m.created_at,
           m.updated_at,

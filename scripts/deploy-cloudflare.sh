@@ -17,7 +17,7 @@ get_env() {
 }
 
 FRONTEND_URL="$(get_env FRONTEND_URL)"
-[[ "$FRONTEND_URL" == "https://college-noticeboard.pages.dev" ]] || fail "FRONTEND_URL must be https://college-noticeboard.pages.dev"
+[[ "$FRONTEND_URL" == "https://college-noticeboard-final.pages.dev" ]] || fail "FRONTEND_URL must be https://college-noticeboard-final.pages.dev"
 
 echo "== Installing dependencies =="
 npm ci

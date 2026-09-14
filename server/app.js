@@ -51,8 +51,17 @@ const configuredOrigins = String(
 
 const allowedOrigins = new Set([
   "http://localhost:5173",
+  "https://college-noticeboard.pages.dev",
+  "https://college-noticeboard-final.pages.dev",
   ...configuredOrigins,
 ]);
+
+function isAllowedOrigin(origin) {
+  return (
+    allowedOrigins.has(origin) ||
+    /^https:\/\/[a-z0-9-]+\.college-noticeboard-final\.pages\.dev$/i.test(origin)
+  );
+}
 
 app.use(
   cors({
@@ -62,7 +71,7 @@ app.use(
         return callback(null, true);
       }
 
-      if (allowedOrigins.has(origin)) {
+      if (isAllowedOrigin(origin)) {
         return callback(null, true);
       }
 

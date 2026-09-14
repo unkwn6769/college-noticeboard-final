@@ -2278,81 +2278,31 @@ app.get(
             0
           ) AS transferred_bytes,
 
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.id
-            END
-          ) AS current_item_id,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.size_bytes
-            END
-          ) AS current_file_size,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.bytes_transferred
-            END
-          ) AS current_file_bytes,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.speed_bytes_per_second
-            END
-          ) AS current_file_speed_bytes_per_second,
+          active_item.id AS current_item_id,
+          active_item.status AS current_file_status,
+          active_item.size_bytes AS current_file_size,
+          active_item.bytes_transferred AS current_file_bytes,
+          active_item.speed_bytes_per_second AS current_file_speed_bytes_per_second,
 
           COALESCE(
             SUM(i.speed_bytes_per_second) FILTER (WHERE i.status = 'running'),
             0
           ) AS active_speed_bytes_per_second,
 
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.transfer_phase
-            END
-          ) AS current_file_phase,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.started_at
-            END
-          ) AS current_file_started_at,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN r.name
-            END
-          ) AS current_file_name,
-
-          MAX(
-            CASE
-              WHEN m.status IN ('pending', 'running', 'waiting_for_storage')
-                AND i.source_file_id = m.current_file_id
-              THEN i.target_account_id
-            END
-          ) AS current_target_account_id,
+          active_item.transfer_phase AS current_file_phase,
+          active_item.started_at AS current_file_started_at,
+          active_item.name AS current_file_name,
+          active_item.target_account_id AS current_target_account_id,
 
           completed_item.id AS completed_item_id,
           completed_item.name AS completed_file_name,
           completed_item.size_bytes AS completed_file_size,
           completed_item.bytes_transferred AS completed_file_bytes,
           completed_item.target_file_id AS completed_target_file_id,
-          completed_item.target_account_id AS completed_target_account_id
+          completed_item.target_account_id AS completed_target_account_id,
+          next_item.id AS next_item_id,
+          next_item.name AS next_file_name,
+          next_item.size_bytes AS next_file_size
 
         FROM google_drive_account_migrations m
 
@@ -2370,6 +2320,51 @@ app.get(
             i.target_file_id,
             i.source_file_id
           )
+
+        LEFT JOIN LATERAL (
+        SELECT
+          item.id,
+          resource.name,
+          item.status,
+          item.size_bytes,
+          item.bytes_transferred,
+          item.speed_bytes_per_second,
+          item.transfer_phase,
+          item.started_at,
+          item.target_account_id
+        FROM google_drive_account_migration_items item
+        LEFT JOIN resources resource
+          ON resource.storage_key = COALESCE(
+            item.target_file_id,
+            item.source_file_id
+          )
+        WHERE item.migration_id = m.id
+          AND item.status IN ('running', 'reconciling')
+        ORDER BY
+          CASE WHEN item.status = 'running' THEN 0 ELSE 1 END,
+          item.started_at ASC NULLS LAST,
+          item.id ASC
+        LIMIT 1
+        ) active_item
+        ON TRUE
+
+        LEFT JOIN LATERAL (
+        SELECT
+          item.id,
+          resource.name,
+          item.size_bytes
+        FROM google_drive_account_migration_items item
+        LEFT JOIN resources resource
+          ON resource.storage_key = COALESCE(
+            item.target_file_id,
+            item.source_file_id
+          )
+        WHERE item.migration_id = m.id
+          AND item.status = 'pending'
+        ORDER BY item.created_at ASC NULLS LAST, item.id ASC
+        LIMIT 1
+        ) next_item
+        ON TRUE
 
         LEFT JOIN LATERAL (
           SELECT
@@ -2417,7 +2412,19 @@ app.get(
           completed_item.size_bytes,
           completed_item.bytes_transferred,
           completed_item.target_file_id,
-          completed_item.target_account_id
+          completed_item.target_account_id,
+          active_item.id,
+          active_item.status,
+          active_item.size_bytes,
+          active_item.bytes_transferred,
+          active_item.speed_bytes_per_second,
+          active_item.transfer_phase,
+          active_item.started_at,
+          active_item.name,
+          active_item.target_account_id,
+          next_item.id,
+          next_item.name,
+          next_item.size_bytes
 
         LIMIT 1
         `,
@@ -2663,6 +2670,7 @@ app.get(
               ? {
               id: row.current_item_id,
               name: row.current_file_name,
+              status: row.current_file_status,
               phase: row.current_file_phase,
 
               sizeBytes:
@@ -2683,6 +2691,15 @@ app.get(
               targetAccountId:
                 row.current_target_account_id,
                 }
+              : null,
+
+            nextFile: row.next_item_id
+              ? {
+                id: row.next_item_id,
+                name: row.next_file_name,
+                sizeBytes: String(row.next_file_size ?? 0),
+                status: "pending",
+              }
               : null,
 
             completedFile: row.completed_item_id

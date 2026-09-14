@@ -1205,12 +1205,14 @@ function AdminAccounts() {
                         </h3>
 
                         <div className="mt-1 text-xs capitalize text-slate-500">
+                          {migration.live.currentFile.status ||
+                            "running"}
                           {migration.live.currentFile.phase
-                            ? migration.live.currentFile.phase.replaceAll(
+                            ? ` · ${migration.live.currentFile.phase.replaceAll(
                                 "_",
                                 " "
-                              )
-                            : "transferring"}
+                              )}`
+                            : ""}
                         </div>
 
                         {migration.live.currentFile.targetAccountId && (
@@ -1324,6 +1326,33 @@ function AdminAccounts() {
                     </div>
                   </div>
                 )}
+
+                {!migration.live.currentFile &&
+                  migration.live.nextFile && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+                        Next file
+                      </div>
+
+                      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                        <div className="min-w-0">
+                          <h3 className="break-words text-base font-semibold text-slate-950">
+                            {migration.live.nextFile.name ||
+                              "Queued file"}
+                          </h3>
+                          <div className="mt-1 text-xs text-amber-700">
+                            Waiting to start · Pending
+                          </div>
+                        </div>
+
+                        <div className="text-left text-lg font-bold text-slate-950 sm:text-right">
+                          {formatBytes(
+                            migration.live.nextFile.sizeBytes
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="rounded-xl bg-slate-50 p-4">

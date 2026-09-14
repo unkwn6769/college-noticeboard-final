@@ -97,6 +97,10 @@ echo "== Uploading Worker secrets =="
 echo "== Building frontend =="
 VITE_API_URL="$WORKER_URL" npm run build
 
+if grep -R "http://localhost:3001" dist/assets >/dev/null; then
+  fail "Production frontend bundle still references localhost API"
+fi
+
 echo "== Ensuring Pages project exists =="
 if ! (npx wrangler pages project list --json | python3 -c 'import json,sys; data=json.load(sys.stdin); print(any(p.get("name") == "college-noticeboard" for p in data))' | grep -q True); then
   npx wrangler pages project create college-noticeboard --production-branch main

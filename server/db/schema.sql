@@ -257,6 +257,8 @@ CREATE TABLE IF NOT EXISTS google_drive_account_migration_items (
     target_file_id TEXT,
     target_account_id TEXT,
     size_bytes BIGINT NOT NULL DEFAULT 0,
+    bytes_transferred BIGINT NOT NULL DEFAULT 0,
+    transfer_phase TEXT,
 
     lease_generation BIGINT NOT NULL DEFAULT 0,
     lease_expires_at TIMESTAMPTZ,

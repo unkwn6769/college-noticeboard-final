@@ -2190,24 +2190,40 @@ app.get(
               counts.failed_count +
               counts.reconciliation_expired_count,
             status = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                THEN 'failed'
               WHEN counts.completed_count >= m.total_files
                 THEN 'completed'
+              WHEN counts.failed_count +
+                   counts.reconciliation_expired_count > 0
+                   AND
+                   counts.completed_count +
+                   counts.failed_count +
+                   counts.reconciliation_expired_count >= m.total_files
+                THEN 'failed'
               ELSE m.status
             END,
             current_file_id = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                OR counts.completed_count >= m.total_files
+              WHEN counts.completed_count >= m.total_files
+                OR (
+                  counts.failed_count +
+                  counts.reconciliation_expired_count > 0
+                  AND
+                  counts.completed_count +
+                  counts.failed_count +
+                  counts.reconciliation_expired_count >= m.total_files
+                )
                 THEN NULL
               ELSE m.current_file_id
             END,
             finished_at = CASE
-              WHEN counts.failed_count +
-                   counts.reconciliation_expired_count > 0
-                OR counts.completed_count >= m.total_files
+              WHEN counts.completed_count >= m.total_files
+                OR (
+                  counts.failed_count +
+                  counts.reconciliation_expired_count > 0
+                  AND
+                  counts.completed_count +
+                  counts.failed_count +
+                  counts.reconciliation_expired_count >= m.total_files
+                )
                 THEN COALESCE(m.finished_at, NOW())
               ELSE m.finished_at
             END,

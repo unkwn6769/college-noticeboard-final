@@ -2759,6 +2759,74 @@ app.get(
   }
 );
 
+app.post(
+  "/api/admin/migrations/:id/resume",
+  requireAdmin,
+  async (req, res) => {
+    const migrationId = String(req.params.id || "").trim();
+    const migrationQueue = getRuntimeQueue();
+
+    if (!migrationQueue) {
+      return res.status(503).json({
+        error: "Migration queue is unavailable",
+      });
+    }
+
+    try {
+      const result = await pool.query(
+        `
+          SELECT i.id
+          FROM google_drive_account_migration_items i
+          WHERE i.migration_id = $1
+            AND (
+              i.status = 'pending'
+              OR (
+                i.status = 'running'
+                AND i.lease_expires_at IS NOT NULL
+                AND i.lease_expires_at < NOW()
+              )
+            )
+          ORDER BY i.created_at ASC, i.id ASC
+        `,
+        [migrationId],
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(409).json({
+          error: "No pending or expired migration items are resumable",
+        });
+      }
+
+      await migrationQueue.sendBatch(
+        result.rows.map((item) => ({
+          body: {
+            migrationId,
+            itemId: item.id,
+          },
+        })),
+      );
+
+      await logAdminActivity({
+        req,
+        action: "migration_resume_queued",
+        entityType: "migration",
+        entityId: migrationId,
+        description: `Queued ${result.rows.length} resumable migration items`,
+      });
+
+      return res.json({
+        migrationId,
+        queuedItems: result.rows.length,
+      });
+    } catch (error) {
+      console.error("Admin migration resume failed:", error);
+      return res.status(500).json({
+        error: "Failed to queue resumable migration items",
+      });
+    }
+  },
+);
+
 // "/api/admin/migrations/:id/cancel"
 app.post(
   "/api/admin/migrations/:id/cancel",

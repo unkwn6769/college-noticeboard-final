@@ -35,11 +35,43 @@ function getGoogleErrorStatus(error: unknown): number | null {
   return error instanceof DriveApiError ? error.status : null;
 }
 
+type CleanupTiming = {
+  cleanup_queue_wait_ms: number;
+  cleanup_context_ms: number;
+  cleanup_target_verify_ms: number;
+  source_delete_ms: number;
+  cleanup_finalize_ms: number;
+};
+
+async function measureCleanupPhase<T>(
+  timing: CleanupTiming,
+  key: keyof CleanupTiming,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    timing[key] += Date.now() - startedAt;
+  }
+}
+
 export async function retrySourceCleanup(
   env: Env,
   itemId: string,
 ): Promise<CleanupResult> {
-  const item = await withDatabase(env, async (client) => {
+  const startedAt = Date.now();
+  const timing = {
+    cleanup_queue_wait_ms: 0,
+    cleanup_context_ms: 0,
+    cleanup_target_verify_ms: 0,
+    source_delete_ms: 0,
+    cleanup_finalize_ms: 0,
+  };
+  const item = await measureCleanupPhase(
+    timing,
+    "cleanup_context_ms",
+    () => withDatabase(env, async (client) => {
     const result = await client.query<CleanupRow>(
       `
         SELECT
@@ -62,7 +94,8 @@ export async function retrySourceCleanup(
     );
 
     return result.rows[0] ?? null;
-  });
+    }),
+  );
 
   if (!item) {
     return {
@@ -122,10 +155,14 @@ export async function retrySourceCleanup(
   );
 
   try {
-    const targetFile = await getFile(
-      targetAccessToken,
-      item.target_file_id,
-      "id,name,size,mimeType,md5Checksum,appProperties,trashed",
+    const targetFile = await measureCleanupPhase(
+      timing,
+      "cleanup_target_verify_ms",
+      () => getFile(
+        targetAccessToken,
+        item.target_file_id!,
+        "id,name,size,mimeType,md5Checksum,appProperties,trashed",
+      ),
     );
 
     if (targetFile.trashed) {
@@ -246,9 +283,13 @@ export async function retrySourceCleanup(
   }
 
   try {
-    await deleteFile(
-      sourceAccessToken,
-      item.source_file_id,
+    await measureCleanupPhase(
+      timing,
+      "source_delete_ms",
+      () => deleteFile(
+        sourceAccessToken,
+        item.source_file_id,
+      ),
     );
   } catch (error) {
     const status = getGoogleErrorStatus(error);
@@ -257,7 +298,10 @@ export async function retrySourceCleanup(
       const message =
         error instanceof Error ? error.message : String(error);
 
-      await withDatabase(env, async (client) => {
+      await measureCleanupPhase(
+        timing,
+        "cleanup_finalize_ms",
+        () => withDatabase(env, async (client) => {
         await client.query(
           `
             UPDATE google_drive_account_migration_items
@@ -276,7 +320,17 @@ export async function retrySourceCleanup(
           `,
           [message, item.id],
         );
-      });
+        }),
+      );
+
+      console.log(
+        JSON.stringify({
+          event: "migration_cleanup_timing",
+          itemId,
+          ...timing,
+          total_cleanup_ms: Date.now() - startedAt,
+        }),
+      );
 
       return {
         status: "failed",

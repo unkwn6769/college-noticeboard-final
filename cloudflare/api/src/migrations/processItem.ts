@@ -144,6 +144,42 @@ function retryDelay(
   );
 }
 
+type ItemTiming = {
+  claim_ms: number;
+  context_ms: number;
+  auth_ms: number;
+  source_get_ms: number;
+  copy_ms: number;
+  target_verify_ms: number;
+  mapping_ms: number;
+  completion_ms: number;
+  retry_occurred: boolean;
+  reconciliation: boolean;
+};
+
+type NumericTimingKey =
+  | "claim_ms"
+  | "context_ms"
+  | "auth_ms"
+  | "source_get_ms"
+  | "copy_ms"
+  | "target_verify_ms"
+  | "mapping_ms"
+  | "completion_ms";
+
+async function measurePhase<T>(
+  timings: ItemTiming,
+  key: NumericTimingKey,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    timings[key] += Date.now() - startedAt;
+  }
+}
+
 export async function processMigrationItem(
   env: Env,
   rawMessage: unknown,
@@ -155,12 +191,24 @@ export async function processMigrationItem(
     itemId,
   } = rawMessage;
 
-  const claimed =
-    await claimExactItem(
-      env,
-      migrationId,
-      itemId,
-    );
+  const timings: ItemTiming = {
+    claim_ms: 0,
+    context_ms: 0,
+    auth_ms: 0,
+    source_get_ms: 0,
+    copy_ms: 0,
+    target_verify_ms: 0,
+    mapping_ms: 0,
+    completion_ms: 0,
+    retry_occurred: false,
+    reconciliation: false,
+  };
+  const itemStartedAt = Date.now();
+  const claimed = await measurePhase(
+    timings,
+    "claim_ms",
+    () => claimExactItem(env, migrationId, itemId),
+  );
 
   if (!claimed) {
     const current =
@@ -259,10 +307,10 @@ export async function processMigrationItem(
       item,
       sourceAccount,
       targetAccount,
-    } = await loadMigrationContext(
-      env,
-      migrationId,
-      itemId,
+    } = await measurePhase(
+      timings,
+      "context_ms",
+      () => loadMigrationContext(env, migrationId, itemId),
     );
 
     /*
@@ -274,20 +322,23 @@ export async function processMigrationItem(
       activeAccountId = targetAccount.id;
       lastOperation = "target_auth";
 
-      const targetToken =
-        await getDriveAccessToken(
-          env,
-          targetAccount,
-        );
+      const targetToken = await measurePhase(
+        timings,
+        "auth_ms",
+        () => getDriveAccessToken(env, targetAccount),
+      );
 
       lastOperation = "target_verify";
 
-      const persistedTarget =
-        await getFile(
+      const persistedTarget = await measurePhase(
+        timings,
+        "target_verify_ms",
+        () => getFile(
           targetToken,
-          item.target_file_id,
+          item.target_file_id!,
           "id,name,size,mimeType,md5Checksum,appProperties,trashed",
-        );
+        ),
+      );
 
       if (
         !persistedTarget.id ||
@@ -297,47 +348,58 @@ export async function processMigrationItem(
           "Persisted target file could not be verified",
         );
       }
+      const persistedTargetId = persistedTarget.id;
 
-      await ensureTargetMapping(env, {
-        itemId,
-        leaseGeneration,
-        targetFileId: persistedTarget.id,
-        targetName: persistedTarget.name,
-        targetSize: persistedTarget.size,
-      });
-      await markCompleted(
-        env,
-        itemId,
-        leaseGeneration,
-        persistedTarget.id,
+      await measurePhase(
+        timings,
+        "mapping_ms",
+        () => ensureTargetMapping(env, {
+          itemId,
+          leaseGeneration,
+          targetFileId: persistedTargetId,
+          targetName: persistedTarget.name,
+          targetSize: persistedTarget.size,
+        }),
+      );
+      await measurePhase(
+        timings,
+        "completion_ms",
+        () => markCompleted(
+          env,
+          itemId,
+          leaseGeneration,
+          persistedTargetId,
+        ),
       );
 
       return {
         status: "completed",
         migrationId,
         itemId,
-        targetFileId:
-          persistedTarget.id,
+        targetFileId: persistedTargetId,
       };
     }
 
     activeAccountId = sourceAccount.id;
     lastOperation = "source_auth";
 
-    const sourceToken =
-      await getDriveAccessToken(
-        env,
-        sourceAccount,
-      );
+    const sourceToken = await measurePhase(
+      timings,
+      "auth_ms",
+      () => getDriveAccessToken(env, sourceAccount),
+    );
 
     lastOperation = "source_read";
 
-    const sourceFile =
-      await getFile(
+    const sourceFile = await measurePhase(
+      timings,
+      "source_get_ms",
+      () => getFile(
         sourceToken,
         item.source_file_id,
         "id,name,size,mimeType,md5Checksum,appProperties,trashed,copyRequiresWriterPermission",
-      );
+      ),
+    );
 
     if (!sourceFile.id) {
       throw new Error(
@@ -379,6 +441,7 @@ export async function processMigrationItem(
           undefined,
           RECONCILIATION_DEADLINE_MS,
         );
+      timings.reconciliation = true;
 
       if (
         reconciliation.kind ===
@@ -422,18 +485,26 @@ export async function processMigrationItem(
           );
         }
 
-        await ensureTargetMapping(env, {
-          itemId,
-          leaseGeneration,
-          targetFileId: recoveredTargetFileId,
-          targetName: reconciliation.targetFile.name,
-          targetSize: reconciliation.targetFile.size,
-        });
-        await markCompleted(
-          env,
-          itemId,
-          leaseGeneration,
-          recoveredTargetFileId,
+        await measurePhase(
+          timings,
+          "mapping_ms",
+          () => ensureTargetMapping(env, {
+            itemId,
+            leaseGeneration,
+            targetFileId: recoveredTargetFileId,
+            targetName: reconciliation.targetFile.name,
+            targetSize: reconciliation.targetFile.size,
+          }),
+        );
+        await measurePhase(
+          timings,
+          "completion_ms",
+          () => markCompleted(
+            env,
+            itemId,
+            leaseGeneration,
+            recoveredTargetFileId,
+          ),
         );
 
         return {
@@ -449,11 +520,11 @@ export async function processMigrationItem(
     activeAccountId = targetAccount.id;
     lastOperation = "target_auth";
 
-    const targetToken =
-      await getDriveAccessToken(
-        env,
-        targetAccount,
-      );
+    const targetToken = await measurePhase(
+      timings,
+      "auth_ms",
+      () => getDriveAccessToken(env, targetAccount),
+    );
 
     /*
      * The primary Worker path is Google-side copy:
@@ -465,8 +536,10 @@ export async function processMigrationItem(
      */
     lastOperation = "target_copy";
 
-    const copyResult =
-      await tryDriveSideCopy({
+    const copyResult = await measurePhase(
+      timings,
+      "copy_ms",
+      () => tryDriveSideCopy({
         sourceAccessToken: sourceToken,
         targetAccessToken: targetToken,
         sourceMetadata: sourceFile,
@@ -478,7 +551,8 @@ export async function processMigrationItem(
           speed_bytes_per_second:
             item.speed_bytes_per_second,
         },
-      });
+      }),
+    );
 
     if (copyResult.kind === "fallback") {
       return {
@@ -514,19 +588,27 @@ export async function processMigrationItem(
       targetFileId,
     );
 
-    await ensureTargetMapping(env, {
-      itemId,
-      leaseGeneration,
-      targetFileId,
-      targetName: targetFile.name,
-      targetSize: targetFile.size,
-    });
+    await measurePhase(
+      timings,
+      "mapping_ms",
+      () => ensureTargetMapping(env, {
+        itemId,
+        leaseGeneration,
+        targetFileId,
+        targetName: targetFile.name,
+        targetSize: targetFile.size,
+      }),
+    );
 
-    await markCompleted(
-      env,
-      itemId,
-      leaseGeneration,
-      targetFileId,
+    await measurePhase(
+      timings,
+      "completion_ms",
+      () => markCompleted(
+        env,
+        itemId,
+        leaseGeneration,
+        targetFileId,
+      ),
     );
 
     return {
@@ -537,6 +619,7 @@ export async function processMigrationItem(
     };
 
   } catch (error) {
+    timings.retry_occurred = true;
     if (
       error instanceof
       FencedMigrationItemError
@@ -771,5 +854,15 @@ export async function processMigrationItem(
       itemId,
       reason,
     };
+  } finally {
+    console.log(
+      JSON.stringify({
+        event: "migration_item_timing",
+        migrationId,
+        itemId,
+        ...timings,
+        total_item_ms: Date.now() - itemStartedAt,
+      }),
+    );
   }
 }

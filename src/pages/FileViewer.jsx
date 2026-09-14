@@ -36,6 +36,10 @@ function FileViewer() {
     ? `/department/${slug}?path=${encodeURIComponent(from)}`
     : `/department/${slug}`;
 
+  const fileUrl = path
+    ? `${API_URL}/api/file?path=${encodeURIComponent(path)}&stream=2`
+    : null;
+
   useEffect(() => {
     if (!path) {
       setCheckingFile(false);
@@ -87,6 +91,7 @@ function FileViewer() {
       </div>
     );
   }
+
   const breadcrumbParts = path
     .split("/")
     .filter(Boolean);
@@ -100,9 +105,6 @@ function FileViewer() {
         .join("/") +
       "/",
   }));
-
-  const fileUrl =
-  `${API_URL}/api/file?path=${encodeURIComponent(path)}`
 
 
 

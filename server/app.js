@@ -145,6 +145,14 @@ async function streamDriveFileResponse({
   }
   const acceptRanges = response.headers.get("accept-ranges") || "bytes";
   const dispositionType = downloadMode ? "attachment" : "inline";
+  const shouldBufferPdf = contentType.toLowerCase() === "application/pdf";
+  const bufferedBody = shouldBufferPdf && response.body
+    ? Buffer.from(await response.arrayBuffer())
+    : null;
+
+  if (bufferedBody && !contentLength) {
+    contentLength = String(bufferedBody.byteLength);
+  }
 
   res.status(response.status || 200);
   res.setHeader("Content-Type", contentType);
@@ -165,6 +173,11 @@ async function streamDriveFileResponse({
     "Cache-Control",
     "public, max-age=300, stale-while-revalidate=60"
   );
+
+  if (bufferedBody) {
+    res.end(bufferedBody);
+    return;
+  }
 
   if (response.body) {
     const reader = response.body.getReader();

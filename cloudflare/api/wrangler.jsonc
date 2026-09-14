@@ -12,7 +12,7 @@
     "ALLOWED_ORIGINS": "https://college-noticeboard-final.pages.dev",
     "GOOGLE_DRIVE_HTTP2": "false",
     "NODE_ENV": "production",
-    "MIGRATION_QUEUE_CONCURRENCY": "4"
+    "MIGRATION_QUEUE_CONCURRENCY": "10"
   },
   "queues": {
     "consumers": [

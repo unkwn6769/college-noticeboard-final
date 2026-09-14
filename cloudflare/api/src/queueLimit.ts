@@ -1,8 +1,8 @@
 // The clean item path is approximately 18 Hyperdrive statements, two Drive
-// calls, and one cleanup enqueue. Four items therefore stay below 100 backend
-// operations even before normal queue overhead; the cap prevents the former
-// unbounded batch behavior from returning.
-export const MAX_QUEUE_MESSAGES_PER_INVOCATION = 4;
+// calls, and one cleanup enqueue. At the hard cap of 20, that remains below
+// the paid Worker subrequest limit on the normal path while leaving room for
+// the configured production value to be increased only through measurement.
+export const MAX_QUEUE_MESSAGES_PER_INVOCATION = 20;
 export const DEFERRED_QUEUE_RETRY_DELAY_SECONDS = 1;
 
 export function shouldProcessQueueMessage(

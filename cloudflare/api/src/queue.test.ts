@@ -10,19 +10,20 @@ import {
 } from "./queueLimit";
 
 test("queue invocation bounds expensive migration work", () => {
-  assert.equal(MAX_QUEUE_MESSAGES_PER_INVOCATION, 4);
+  assert.equal(MAX_QUEUE_MESSAGES_PER_INVOCATION, 20);
   assert.equal(DEFERRED_QUEUE_RETRY_DELAY_SECONDS, 1);
   assert.equal(shouldProcessQueueMessage(0), true);
-  assert.equal(shouldProcessQueueMessage(3), true);
-  assert.equal(shouldProcessQueueMessage(4), false);
+  assert.equal(shouldProcessQueueMessage(19), true);
+  assert.equal(shouldProcessQueueMessage(20), false);
   assert.equal(shouldProcessQueueMessage(99), false);
 });
 
-test("queue concurrency is configurable but capped at the safe maximum", () => {
+test("queue concurrency is configurable but capped at the hard maximum", () => {
   assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "2" }), 2);
   assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "4" }), 4);
-  assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "5" }), 4);
-  assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "invalid" }), 4);
+  assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "20" }), 20);
+  assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "21" }), 20);
+  assert.equal(getQueueConcurrency({ MIGRATION_QUEUE_CONCURRENCY: "invalid" }), 20);
 });
 
 test("bounded queue workers run four items concurrently and isolate failures", async () => {

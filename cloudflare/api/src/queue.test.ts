@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 
 import {
+  DEFERRED_QUEUE_RETRY_DELAY_SECONDS,
   getQueueConcurrency,
   MAX_QUEUE_MESSAGES_PER_INVOCATION,
   runWithBoundedConcurrency,
@@ -10,6 +11,7 @@ import {
 
 test("queue invocation bounds expensive migration work", () => {
   assert.equal(MAX_QUEUE_MESSAGES_PER_INVOCATION, 4);
+  assert.equal(DEFERRED_QUEUE_RETRY_DELAY_SECONDS, 1);
   assert.equal(shouldProcessQueueMessage(0), true);
   assert.equal(shouldProcessQueueMessage(3), true);
   assert.equal(shouldProcessQueueMessage(4), false);

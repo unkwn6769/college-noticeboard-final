@@ -12,6 +12,7 @@ import {
 } from "./migrations/queueDispatch";
 import { finalizeMigrationIfComplete } from "./migrations/finalizeMigration";
 import {
+  DEFERRED_QUEUE_RETRY_DELAY_SECONDS,
   getQueueConcurrency,
   runWithBoundedConcurrency,
   shouldProcessQueueMessage,
@@ -72,7 +73,9 @@ export default {
         continue;
       }
 
-      message.retry({ delaySeconds: 5 });
+      message.retry({
+        delaySeconds: DEFERRED_QUEUE_RETRY_DELAY_SECONDS,
+      });
     }
 
     await runWithBoundedConcurrency(

@@ -3,6 +3,7 @@
 // operations even before normal queue overhead; the cap prevents the former
 // unbounded batch behavior from returning.
 export const MAX_QUEUE_MESSAGES_PER_INVOCATION = 4;
+export const DEFERRED_QUEUE_RETRY_DELAY_SECONDS = 1;
 
 export function shouldProcessQueueMessage(
   index: number,

@@ -1,9 +1,31 @@
-# Quick start
+# College Noticeboard — Quick Start
 
-1. Copy `.env.example` to `.env` locally and fill in real secrets.
-2. Install dependencies at the project root: `npm install`.
-3. Run the application backend: `npm run server:dev`.
-4. Run the frontend: `npm run dev`.
-5. Read `DEPLOYMENT.md` for production deployment.
+## Local development
 
-Cloudflare Worker source lives in `cloudflare/api/`. Its current entrypoint provides health checks and the Queue binding foundation; the existing Express server remains the complete application API.
+```bash
+npm install
+npm run dev
+```
+
+Backend:
+
+```bash
+npm --prefix server run dev
+```
+
+## Cloudflare production deployment
+
+1. Put the real local deployment values in `.env`.
+2. Run `npx wrangler login --use-keyring` once.
+3. Run `./scripts/deploy-cloudflare.sh`.
+4. On the first run, add the printed Worker OAuth callback URLs to Google Cloud and `.env`.
+5. Run the deployment script again.
+
+The final public endpoints are expected to be:
+
+```text
+Frontend: https://college-noticeboard.pages.dev
+API:      https://college-noticeboard-api.<your-workers-subdomain>.workers.dev
+```
+
+The frontend build receives the API URL automatically from the deployment script, so `VITE_API_URL` does not need to be committed.

@@ -1,60 +1,110 @@
-import { Client } from "pg";
+import { httpServerHandler } from "cloudflare:node";
+
+import app from "../../../server/app.js";
+import { runWithRuntimeContext } from "../../../server/runtimeContext.js";
+import { processMigrationItem } from "./migrations/processItem";
+import { retrySourceCleanup } from "./migrations/sourceCleanup";
+import {
+  isMigrationKickoffMessage,
+  isNormalMigrationMessage,
+  isSourceCleanupMessage,
+  seedPendingMigrationItems,
+} from "./migrations/queueDispatch";
+
+app.listen(3000);
+
+const nodeHandler = httpServerHandler({ port: 3000 });
+const nodeFetch = nodeHandler.fetch;
+
+if (!nodeFetch) {
+  throw new Error("Cloudflare Node HTTP handler does not expose fetch()");
+}
+
+function retryDelaySeconds(delayMs: number | undefined): number {
+  const value = Number(delayMs);
+  if (!Number.isFinite(value)) return 5;
+  return Math.max(1, Math.ceil(value / 1000));
+}
 
 export default {
-  async fetch(request, env): Promise<Response> {
-    const url = new URL(request.url);
+  ...nodeHandler,
 
-    if (url.pathname === "/health") {
-      return Response.json({
-        ok: true,
-        service: "college-noticeboard-api",
-      });
-    }
-
-    if (url.pathname === "/health/db") {
-      const client = new Client({
-        connectionString: env.HYPERDRIVE.connectionString,
-      });
-
-      try {
-        await client.connect();
-
-        const result = await client.query(`
-          SELECT
-            NOW() AS now,
-            current_database() AS database_name
-        `);
-
-        return Response.json({
-          ok: true,
-          database: result.rows[0],
-        });
-      } catch (error) {
-        console.error("Database health check failed:", error);
-
-        return Response.json(
-          {
-            ok: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : String(error),
-          },
-          { status: 500 },
-        );
-      } finally {
-        await client.end().catch(() => {});
-      }
-    }
-
-    return new Response("Not found", { status: 404 });
+  async fetch(request, env, ctx): Promise<Response> {
+    return runWithRuntimeContext(env, () =>
+      nodeFetch(request, env, ctx),
+    );
   },
 
-  async queue(batch): Promise<void> {
+  async queue(batch, env): Promise<void> {
     for (const message of batch.messages) {
-      console.log(
-        `migration queue message ${message.id}: ${JSON.stringify(message.body)}`,
-      );
+      try {
+        if (isMigrationKickoffMessage(message.body)) {
+          const result = await seedPendingMigrationItems(
+            env,
+            message.body.migrationId,
+          );
+
+          if (result.hasMore) {
+            await env.MIGRATION_QUEUE.send({
+              type: "migration_kickoff",
+              migrationId: message.body.migrationId,
+            });
+          }
+
+          message.ack();
+          continue;
+        }
+
+        if (isSourceCleanupMessage(message.body)) {
+          const result = await retrySourceCleanup(
+            env,
+            message.body.itemId,
+          );
+
+          if (result.status === "failed") {
+            message.retry({ delaySeconds: 60 });
+          } else {
+            message.ack();
+          }
+
+          continue;
+        }
+
+        if (!isNormalMigrationMessage(message.body)) {
+          throw new Error("Invalid migration queue message");
+        }
+
+        const result = await processMigrationItem(
+          env,
+          message.body,
+        );
+
+        switch (result.status) {
+          case "retry_later":
+          case "retrying":
+          case "waiting_for_storage":
+          case "reconciling":
+            message.retry({
+              delaySeconds: retryDelaySeconds(result.delayMs),
+            });
+            break;
+          default:
+            message.ack();
+            break;
+        }
+      } catch (error) {
+        console.error(
+          `Migration queue message ${message.id} failed:`,
+          error,
+        );
+
+        message.retry({
+          delaySeconds: Math.min(
+            60,
+            Math.max(5, 2 ** Math.min(message.attempts, 6)),
+          ),
+        });
+      }
     }
   },
 } satisfies ExportedHandler<Env>;

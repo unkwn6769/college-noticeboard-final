@@ -1,46 +1,146 @@
 import pg from "pg";
+import { getRuntimeContext } from "../runtimeContext.js";
 
-const { Pool } = pg;
+const { Pool, Client } = pg;
 
-const connectionString = process.env.DATABASE_URL;
+let nodePool = null;
+const nodePoolListeners = [];
 
-if (!connectionString) {
-  throw new Error("DATABASE_URL is not set");
+function createNodePool() {
+  const connectionString = process.env.DATABASE_URL;
+
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not set");
+  }
+
+  const createdPool = new Pool({
+    connectionString,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+    connectionTimeoutMillis: Number(
+      process.env.DB_CONNECTION_TIMEOUT_MS || 10_000,
+    ),
+    idleTimeoutMillis: Number(
+      process.env.DB_IDLE_TIMEOUT_MS || 15_000,
+    ),
+    max: Number(process.env.DB_POOL_MAX || 12),
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    maxLifetimeSeconds: Number(
+      process.env.DB_MAX_LIFETIME_SECONDS || 300,
+    ),
+  });
+
+  for (const [event, listener] of nodePoolListeners) {
+    createdPool.on(event, listener);
+  }
+
+  return createdPool;
 }
 
-export const pool = new Pool({
-  connectionString,
+function getNodePool() {
+  if (!nodePool) {
+    nodePool = createNodePool();
+  }
 
-  // Supabase/Supavisor is remote in both local development and production.
-  // Always use TLS so the same connection behavior is used everywhere.
-  ssl: {
-    rejectUnauthorized: false,
+  return nodePool;
+}
+
+async function getRequestClient() {
+  const context = getRuntimeContext();
+
+  if (!context) {
+    return null;
+  }
+
+  if (!context.client) {
+    const connectionString =
+      context.env?.HYPERDRIVE?.connectionString;
+
+    if (!connectionString) {
+      throw new Error(
+        "HYPERDRIVE connection string is unavailable",
+      );
+    }
+
+    context.client = new Client({
+      connectionString,
+    });
+
+    await context.client.connect();
+  }
+
+  return context.client;
+}
+
+async function runtimeQuery(...args) {
+  const client = await getRequestClient();
+
+  if (client) {
+    return client.query(...args);
+  }
+
+  return getNodePool().query(...args);
+}
+
+async function runtimeConnect() {
+  const context = getRuntimeContext();
+
+  if (!context) {
+    return getNodePool().connect();
+  }
+
+  const connectionString =
+    context.env?.HYPERDRIVE?.connectionString;
+
+  if (!connectionString) {
+    throw new Error(
+      "HYPERDRIVE connection string is unavailable",
+    );
+  }
+
+  const client = new Client({
+    connectionString,
+  });
+
+  await client.connect();
+
+  // Preserve pg.Pool.connect() semantics expected by the existing
+  // application code. This client owns its session and must be released
+  // independently from the request-scoped query client.
+  client.release = () => client.end();
+
+  return client;
+}
+
+export const pool = {
+  query(...args) {
+    return runtimeQuery(...args);
   },
 
-  // Prevent a dead network path from hanging a worker indefinitely.
-  connectionTimeoutMillis: Number(
-    process.env.DB_CONNECTION_TIMEOUT_MS || 10_000
-  ),
+  connect() {
+    return runtimeConnect();
+  },
 
-  // Recycle idle sockets before network middleboxes have a chance to leave
-  // them half-open. This is intentionally long enough to preserve pooling
-  // efficiency while avoiding stale connections during long migrations.
-  idleTimeoutMillis: Number(
-    process.env.DB_IDLE_TIMEOUT_MS || 15_000
-  ),
+  end(...args) {
+    if (!nodePool) {
+      return Promise.resolve();
+    }
 
-  // Keep DB concurrency bounded independently from the 60 Drive workers.
-  max: Number(process.env.DB_POOL_MAX || 12),
+    return nodePool.end(...args);
+  },
 
-  // TCP keepalive reduces stale long-lived socket failures.
-  keepAlive: true,
-  keepAliveInitialDelayMillis: 10_000,
+  on(event, listener) {
+    if (nodePool) {
+      nodePool.on(event, listener);
+    } else {
+      nodePoolListeners.push([event, listener]);
+    }
 
-  // Periodically recycle clients to avoid long-lived pooler/NAT state.
-  maxLifetimeSeconds: Number(
-    process.env.DB_MAX_LIFETIME_SECONDS || 300
-  ),
-});
+    return this;
+  },
+};
 
 pool.on("error", (error) => {
   const code = error?.code;
@@ -52,7 +152,7 @@ pool.on("error", (error) => {
     code === "EPIPE"
   ) {
     console.error(
-      `[DATABASE] Transient PostgreSQL connection error: ${code}`
+      `[DATABASE] Transient PostgreSQL connection error: ${code}`,
     );
     return;
   }

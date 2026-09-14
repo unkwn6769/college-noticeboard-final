@@ -12,7 +12,8 @@
     "server:dev": "npm --prefix server run dev",
     "server:start": "npm --prefix server start",
     "test": "npm --prefix server test",
-    "dev:all": "bash scripts/dev-all.sh"
+    "dev:all": "bash scripts/dev-all.sh",
+    "deploy:cloudflare": "./scripts/deploy-cloudflare.sh"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

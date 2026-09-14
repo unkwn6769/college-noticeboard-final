@@ -1,2 +1,9 @@
-# Local Worker secrets only. Never commit real values.
+# Worker secrets for local Wrangler development. Never commit real values.
 TOKEN_ENCRYPTION_KEY=replace-with-a-long-random-secret
+ADMIN_GOOGLE_CLIENT_ID=replace-with-google-client-id
+ADMIN_GOOGLE_CLIENT_SECRET=replace-with-google-client-secret
+ADMIN_GOOGLE_REDIRECT_URI=http://localhost:8787/api/admin/auth/google/callback
+ADMIN_SESSION_SECRET=replace-with-a-long-random-secret
+DRIVE_ACCOUNT_GOOGLE_CLIENT_ID=replace-with-google-client-id
+DRIVE_ACCOUNT_GOOGLE_CLIENT_SECRET=replace-with-google-client-secret
+DRIVE_ACCOUNT_GOOGLE_REDIRECT_URI=http://localhost:8787/api/admin/accounts/google/callback

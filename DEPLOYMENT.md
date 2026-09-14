@@ -1,127 +1,131 @@
-# College Noticeboard — Deployment Guide
+# College Noticeboard — Cloudflare Deployment
 
-This release is packaged as a hybrid deployment:
+This release uses a Cloudflare-native application path:
 
-- **Frontend:** Vite/React static site, suitable for Cloudflare Pages.
-- **Application API:** the existing Express/PostgreSQL backend, containerized for a Node service such as Northflank.
-- **Migration acceleration:** the Cloudflare Worker under `cloudflare/api/`, using Hyperdrive and Cloudflare Queues.
+```text
+Browser
+  -> Cloudflare Pages (React/Vite)
+  -> Cloudflare Worker (Express API)
+     -> Hyperdrive -> Supabase/PostgreSQL
+     -> Google APIs
 
-The uploaded source already contains the project-specific Hyperdrive and Queue bindings. A different Cloudflare account should create replacement resources and update `cloudflare/api/wrangler.jsonc` accordingly.
+Admin migration actions
+  -> Cloudflare Queue
+  -> same Worker queue consumer
+  -> Google Drive / Hyperdrive
+```
 
-## 1. Database
+The Node server remains available for local development and compatibility testing. It is not required as a separate production service for the Cloudflare deployment.
 
-Use the existing PostgreSQL database. Before production startup, apply `server/db/schema.sql` to a new database, or let the application's schema/bootstrap routines perform their supported migrations against an existing database.
+## Cloudflare resources
 
-Do not put `DATABASE_URL` into the repository or release ZIP.
+The Worker configuration expects these existing resources:
 
-## 2. Express backend
+- Worker: `college-noticeboard-api`
+- Queue: `college-noticeboard-migrations`
+- Hyperdrive: `143a18762ebe484186882c4e53d9bee8`
+- Pages project: `college-noticeboard`
 
-The repository root contains `Dockerfile` for the backend service.
+For a different Cloudflare account, replace the Hyperdrive/Queue resources in `cloudflare/api/wrangler.jsonc` with resources owned by that account.
 
-Required runtime variables include:
+## First deployment
 
-- `DATABASE_URL`
+Create a local `.env` from `.env.example` and fill in the real values. `.env` is deliberately excluded from the release ZIP.
+
+Log in:
+
+```bash
+npx wrangler login --use-keyring
+```
+
+Then run:
+
+```bash
+./scripts/deploy-cloudflare.sh
+```
+
+The script first publishes the Worker so it can determine the final `workers.dev` hostname. It then stops before secret upload if the Google OAuth redirect URIs in `.env` do not match that hostname.
+
+Set these two values in `.env` to the printed Worker URL:
+
+```text
+ADMIN_GOOGLE_REDIRECT_URI=https://<worker-host>/api/admin/auth/google/callback
+DRIVE_ACCOUNT_GOOGLE_REDIRECT_URI=https://<worker-host>/api/admin/accounts/google/callback
+```
+
+Add the same two callback URLs to the corresponding Google OAuth client configurations. Then rerun the deployment script.
+
+The script bulk-uploads the Worker secrets, builds the frontend with the Worker URL as `VITE_API_URL`, creates the Pages project when needed, and deploys `dist/` to Pages.
+
+## Required Worker secrets
+
+The script uploads only these secret values:
+
 - `TOKEN_ENCRYPTION_KEY`
 - `ADMIN_GOOGLE_CLIENT_ID`
 - `ADMIN_GOOGLE_CLIENT_SECRET`
 - `ADMIN_GOOGLE_REDIRECT_URI`
 - `ADMIN_SESSION_SECRET`
-- `ALLOWED_ORIGINS`
-- the existing Google Drive / migration variables from `.env.example`
+- `DRIVE_ACCOUNT_GOOGLE_CLIENT_ID`
+- `DRIVE_ACCOUNT_GOOGLE_CLIENT_SECRET`
+- `DRIVE_ACCOUNT_GOOGLE_REDIRECT_URI`
 
-Set `ALLOWED_ORIGINS` to the public frontend origin, for example:
+`DATABASE_URL` is not uploaded to the Worker. Worker database access uses Hyperdrive. The Node runtime still uses `DATABASE_URL` locally.
 
-`https://your-site.example`
+## Public configuration
 
-The service listens on `PORT` (default `3001`).
+`cloudflare/api/wrangler.jsonc` contains non-secret production configuration:
 
-Health endpoint:
+- `FRONTEND_URL=https://college-noticeboard.pages.dev`
+- `ALLOWED_ORIGINS=https://college-noticeboard.pages.dev`
+- `GOOGLE_DRIVE_HTTP2=true`
+- `NODE_ENV=production`
 
-`GET /health`
+## Migration execution
 
-## 3. Frontend
+Creating a migration inserts all migration items transactionally, then queues a `migration_kickoff` message. The Worker seeds pending items into Queue batches of up to 100 messages.
 
-Build the Vite app with:
+Normal queue messages use the existing `{ migrationId, itemId }` contract. Source-cleanup retries use a separate `{ type: "source_cleanup_retry", itemId }` contract.
+
+The migration engine keeps its durable PostgreSQL retry/reconciliation state. Queue retries are only the delivery mechanism. Source cleanup performs the target-file, migration-marker, and application-mapping safety checks before deleting a source.
+
+Cloudflare Queues currently allow up to 100 messages per `sendBatch`, up to 100 messages per consumer batch, and automatic consumer concurrency scaling. Queue operations on Workers Free are subject to the current included-operation quota, so large migrations can exceed a Free-plan daily quota even though the deployment itself is card-free.
+
+## Validation
+
+Static validation:
+
+```bash
+./scripts/verify-final.sh
+```
+
+Full development validation:
 
 ```bash
 npm install
+npm run lint
 npm run build
-```
+npm test
 
-The output directory is `dist/`.
-
-Set:
-
-`VITE_API_URL=https://your-api.example`
-
-The included `public/_redirects` keeps React Router routes working on Cloudflare Pages.
-
-## 4. Cloudflare Worker
-
-From `cloudflare/api`:
-
-```bash
+cd cloudflare/api
 npm install
 npx wrangler types
-npx wrangler deploy
-```
-
-Set secrets with:
-
-```bash
-npx wrangler secret put TOKEN_ENCRYPTION_KEY
-```
-
-For local development, copy `.dev.vars.example` to `.dev.vars` and fill in local values. Never commit `.dev.vars`.
-
-The Worker configuration contains:
-
-- Hyperdrive binding `HYPERDRIVE`
-- Queue producer binding `MIGRATION_QUEUE`
-- Queue consumer for `college-noticeboard-migrations`
-
-The current Worker entrypoint is intentionally a foundation: its HTTP routes expose health checks and its queue handler currently logs received messages. The complete Express API remains the production application API. The migration processor modules are included for the Cloudflare migration path but are not silently presented as a replacement for the whole server.
-
-## 5. Important architecture note
-
-The Cloudflare Worker source in this release is the migration-execution foundation. The Express server remains the complete application API and admin API. The Worker does **not** replace every Express route.
-
-That means the normal production deployment is still:
-
-`Browser → Express API`
-
-with Cloudflare used for migration execution/acceleration and Hyperdrive access to PostgreSQL.
-
-Do not remove the Express API unless every `/api/*` route used by the frontend and admin panel has been ported and tested.
-
-## 6. Security checklist
-
-- Keep `.env`, `.dev.vars`, OAuth client secrets, refresh tokens, and database credentials outside the repository.
-- Use HTTPS for the frontend and API in production.
-- Use a production `ADMIN_SESSION_SECRET` and `TOKEN_ENCRYPTION_KEY`.
-- Configure the Google OAuth redirect URIs to the actual production endpoints.
-- Set `ALLOWED_ORIGINS` explicitly; do not use `*` with credentialed admin requests.
-
-## 7. Local verification
-
-Frontend:
-
-```bash
-npm run build
-npm run lint
-```
-
-Application server:
-
-```bash
-npm --prefix server run preflight
-npm test
-```
-
-Cloudflare Worker:
-
-```bash
-cd cloudflare/api
 npx tsc --noEmit
 npm test
+npx wrangler deploy --dry-run
 ```
+
+Do not run the Node integration test suite against a production database without understanding its fixtures and cleanup behavior.
+
+## Security
+
+Never commit or package:
+
+- `.env`
+- `.dev.vars`
+- OAuth client secrets
+- Google refresh tokens
+- database passwords
+- encryption keys
+
+Cloudflare recommends Wrangler secrets for sensitive Worker configuration rather than storing secrets in the Wrangler configuration or source.

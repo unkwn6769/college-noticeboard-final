@@ -2312,16 +2312,30 @@ export function createTrackedUploadStream(
     },
 
     flush(callback) {
-      if (fenceError) {
-        callback(fenceError);
-        return;
-      }
-
       /*
-       * The upload completion is immediately followed by a fenced progress
-       * transition, so avoid an extra forced PostgreSQL UPDATE here.
+       * Wait for all progress writes already queued during the transfer
+       * before allowing the stream to finish. This guarantees that a stale
+       * lease is observed and recorded before callers inspect the tracker.
+       *
+       * Do not enqueue another progress UPDATE here.
        */
-      callback();
+      writeChain
+        .then(() => {
+          if (fenceError) {
+            callback(fenceError);
+            return;
+          }
+
+          callback();
+        })
+        .catch((error) => {
+          if (fenceError) {
+            callback(fenceError);
+            return;
+          }
+
+          callback(error);
+        });
     },
   });
 

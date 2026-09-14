@@ -1,21 +1,36 @@
 # Release Status
 
-This bundle was prepared from the uploaded `college-noticeboard-final` project source.
+## Architecture
 
-## Verified in the supplied project state
+Production target is Cloudflare-only for the application path:
 
-- Cloudflare Worker/Hyperdrive foundation is present.
-- Cloudflare Queue binding is configured.
-- Google Drive REST client and temporary-share copy path are present.
-- Lease-safe migration claiming is present.
-- Migration reconciliation and retry classification are present.
-- Durable resumable-upload state and low-level resumable upload primitives are present.
-- The Cloudflare test suite reported 50 passing tests in the supplied development state.
+- Cloudflare Pages hosts the Vite/React frontend.
+- Cloudflare Worker hosts the Express API through `httpServerHandler`.
+- Hyperdrive provides the PostgreSQL connection path.
+- Cloudflare Queue drives migration work and administrative source-cleanup retries.
+- Google Drive remains the file-storage integration.
 
-## Deployment boundary
+The Node server remains available for local development and regression tests.
 
-The current Cloudflare Worker entrypoint is intentionally not a replacement for the complete Express API. The Express application still owns the broad `/api/*` surface used by the existing frontend/admin UI.
+## Verified before packaging
 
-The release therefore keeps both runtimes instead of silently deleting the working Express API.
+- Node tests: 57/57 passed.
+- Cloudflare tests: 50/50 passed.
+- Cloudflare TypeScript check: passed.
+- Wrangler dry-run: passed.
+- Full Express bundle is below the Workers 64 MiB script-size limit.
 
-Production credentials, OAuth redirect URLs, public frontend/API URLs, and the final Cloudflare resource IDs must be supplied during deployment.
+## Release checks added
+
+- request-scoped Hyperdrive DB context
+- dedicated PostgreSQL sessions for `pool.connect()` transactions
+- Queue-backed migration kickoff
+- Queue-backed manual source cleanup retry
+- target/migration-marker/application-mapping cleanup safety checks
+- bulk secret deployment
+- direct Pages upload deployment
+- secret-free release packaging
+
+## Deployment prerequisite
+
+The Google OAuth clients must contain the final Worker callback URLs before administrator sign-in and Drive-account connection can work in production.

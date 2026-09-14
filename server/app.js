@@ -2347,32 +2347,12 @@ app.get(
             END
           ) AS current_target_account_id,
 
-          MAX(
-            CASE WHEN i.status = 'completed' THEN i.id END
-          ) AS completed_item_id,
-
-          MAX(
-            CASE WHEN i.status = 'completed' THEN r.name END
-          ) AS completed_file_name,
-
-          MAX(
-            CASE WHEN i.status = 'completed' THEN i.size_bytes END
-          ) AS completed_file_size,
-
-          MAX(
-            CASE WHEN i.status = 'completed' THEN i.bytes_transferred END
-          ) AS completed_file_bytes,
-
-          MAX(
-            CASE WHEN i.status = 'completed' THEN i.target_file_id END
-          ) AS completed_target_file_id,
-
-          MAX(
-            CASE
-              WHEN i.status = 'completed'
-              THEN COALESCE(i.target_account_id, m.target_account_id)
-            END
-          ) AS completed_target_account_id
+          completed_item.id AS completed_item_id,
+          completed_item.name AS completed_file_name,
+          completed_item.size_bytes AS completed_file_size,
+          completed_item.bytes_transferred AS completed_file_bytes,
+          completed_item.target_file_id AS completed_target_file_id,
+          completed_item.target_account_id AS completed_target_account_id
 
         FROM google_drive_account_migrations m
 
@@ -2390,6 +2370,27 @@ app.get(
             i.target_file_id,
             i.source_file_id
           )
+
+        LEFT JOIN LATERAL (
+          SELECT
+            item.id,
+            resource.name,
+            item.size_bytes,
+            item.bytes_transferred,
+            item.target_file_id,
+            COALESCE(item.target_account_id, m.target_account_id) AS target_account_id
+          FROM google_drive_account_migration_items item
+          LEFT JOIN resources resource
+            ON resource.storage_key = COALESCE(
+              item.target_file_id,
+              item.source_file_id
+            )
+          WHERE item.migration_id = m.id
+            AND item.status = 'completed'
+          ORDER BY item.finished_at DESC NULLS LAST, item.id DESC
+          LIMIT 1
+        ) completed_item
+          ON TRUE
 
         WHERE m.id = $1
 
@@ -2410,7 +2411,13 @@ app.get(
           m.created_at,
           m.updated_at,
           s.email,
-          t.email
+          t.email,
+          completed_item.id,
+          completed_item.name,
+          completed_item.size_bytes,
+          completed_item.bytes_transferred,
+          completed_item.target_file_id,
+          completed_item.target_account_id
 
         LIMIT 1
         `,

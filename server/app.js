@@ -3269,14 +3269,23 @@ app.get(
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
+
+function normalizeResourcePath(rawPath) {
+  return String(rawPath || "")
+    .trim()
+    .split("/")
+    .map((segment) => {
+      if (!segment) return "";
+      return encodeURIComponent(decodeURIComponent(segment));
+    })
+    .join("/");
+}
+
 app.get("/api/browse", async (req, res) => {
   try {
     const rawPath = String(req.query.path || "").trim();
 
-    const path = rawPath
-      .split("/")
-      .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
-      .join("/");
+    const path = normalizeResourcePath(rawPath);
 
     if (!path) {
       return res.status(400).json({
@@ -3349,13 +3358,7 @@ app.get("/api/file-status", async (req, res) => {
       });
     }
 
-    const path = rawPath
-      .split("/")
-      .map((segment) => {
-        if (!segment) return "";
-        return encodeURIComponent(decodeURIComponent(segment));
-      })
-      .join("/");
+    const path = normalizeResourcePath(rawPath);
 
     if (!path.startsWith("/noticeboards/")) {
       return res.status(400).json({
@@ -3425,7 +3428,7 @@ app.get("/api/file-status", async (req, res) => {
 
 app.get("/api/file", async (req, res) => {
   try {
-    const filePath = String(req.query.path || "").trim();
+    const filePath = normalizeResourcePath(req.query.path);
 
     if (!filePath) {
       return res.status(400).json({

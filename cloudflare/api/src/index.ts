@@ -45,6 +45,14 @@ export default {
             message.body.migrationId,
           );
 
+          // Recompute parent state even when there is nothing left to seed.
+          // This repairs a crash between child finalization and orchestration
+          // without issuing another copy.
+          await finalizeMigrationIfComplete(
+            env,
+            message.body.migrationId,
+          );
+
           if (result.hasMore) {
             await env.MIGRATION_QUEUE.send({
               type: "migration_kickoff",
@@ -62,7 +70,10 @@ export default {
             message.body.itemId,
           );
 
-          if (result.status === "failed") {
+          if (
+            result.status === "failed" ||
+            result.status === "waiting"
+          ) {
             message.retry({ delaySeconds: 60 });
           } else {
             message.ack();
@@ -102,6 +113,16 @@ export default {
               itemId: result.itemId,
             });
 
+            message.ack();
+            break;
+          }
+
+          case "failed":
+          case "reconciliation_expired": {
+            await finalizeMigrationIfComplete(
+              env,
+              result.migrationId,
+            );
             message.ack();
             break;
           }

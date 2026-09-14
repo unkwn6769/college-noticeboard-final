@@ -1,4 +1,5 @@
 import express from "express";
+import { Readable } from "node:stream";
 import { findGoogleAccountForFile } from "./storage/driveAccounts.js";
 import cors from "cors";
 import contentDisposition from "content-disposition";
@@ -75,8 +76,84 @@ app.use(
 
 app.use(express.json());
 
+async function streamDriveFileResponse({
+  res,
+  accessToken,
+  fileId,
+  fileName,
+  mimeType,
+  downloadMode,
+  rangeHeader,
+  fallbackContentType,
+}) {
+  const mediaUrl = new URL(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`
+  );
+  mediaUrl.searchParams.set("alt", "media");
+  mediaUrl.searchParams.set("supportsAllDrives", "true");
 
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+  };
 
+  if (rangeHeader) {
+    headers.Range = rangeHeader;
+  }
+
+  const response = await fetch(mediaUrl, {
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Google Drive media fetch failed with status ${response.status}`
+    );
+  }
+
+  const safeFileName = String(fileName || "file").replace(/[\r\n"]/g, "_");
+  const contentType =
+    response.headers.get("content-type") ||
+    mimeType ||
+    fallbackContentType ||
+    "application/octet-stream";
+  const contentLength = response.headers.get("content-length");
+  const contentRange = response.headers.get("content-range");
+  const acceptRanges = response.headers.get("accept-ranges") || "bytes";
+  const dispositionType = downloadMode ? "attachment" : "inline";
+
+  res.status(response.status || 200);
+  res.setHeader("Content-Type", contentType);
+  res.setHeader(
+    "Content-Disposition",
+    `${dispositionType}; filename="${safeFileName}"`
+  );
+  if (contentLength) {
+    res.setHeader("Content-Length", contentLength);
+  }
+  if (contentRange) {
+    res.setHeader("Content-Range", contentRange);
+  }
+  if (acceptRanges) {
+    res.setHeader("Accept-Ranges", acceptRanges);
+  }
+  res.setHeader(
+    "Cache-Control",
+    "public, max-age=300, stale-while-revalidate=60"
+  );
+
+  if (response.body) {
+    const bodyStream = Readable.fromWeb(response.body);
+    bodyStream.on("error", (error) => {
+      if (!res.writableEnded) {
+        res.destroy(error);
+      }
+    });
+    bodyStream.pipe(res);
+    return;
+  }
+
+  res.end();
+}
 
 // "/api/admin/activity"
 app.get(
@@ -3295,7 +3372,6 @@ app.get("/api/file", async (req, res) => {
         SELECT
           r.storage_key,
           r.name,
-          r.mime_type,
           r.size,
           g.account_id
         FROM resources r
@@ -3318,59 +3394,41 @@ app.get("/api/file", async (req, res) => {
 
     const file = result.rows[0];
 
+    const account = await findGoogleAccountForFile(file.storage_key);
+
+    if (!account) {
+      return res.status(404).json({
+        error: "File account is not connected",
+      });
+    }
+
     const drive =
-      await getGoogleDriveClientForAccount(
-        file.account_id,
-      );
+      await getGoogleDriveClientForAccount(account);
 
-    const response = await drive.files.get(
-      {
-        fileId: file.storage_key,
-        alt: "media",
-      },
-      {
-        responseType: "arraybuffer",
-      },
-    );
+    const auth = drive.context?._options?.auth;
+    const accessToken =
+      auth && typeof auth.getAccessToken === "function"
+        ? (await auth.getAccessToken()).token
+        : null;
 
-    const body = Buffer.from(
-      response.data,
-    );
+    if (!accessToken) {
+      throw new Error("Google Drive access token is unavailable");
+    }
 
-    res.status(200);
+    const shouldDownload =
+      String(req.query.download || "").trim() === "1" ||
+      String(req.query.download || "").trim().toLowerCase() === "true";
 
-    res.setHeader(
-      "Content-Type",
-      file.mime_type ||
-        response.headers?.["content-type"] ||
-        "application/octet-stream",
-    );
-
-    const safeFileName = String(
-      file.name || "file",
-    ).replace(/[\r\n"]/g, "_");
-
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${safeFileName}"`,
-    );
-
-    res.setHeader(
-      "Content-Length",
-      String(body.length),
-    );
-
-    res.setHeader(
-      "Accept-Ranges",
-      "bytes",
-    );
-
-    res.setHeader(
-      "Cache-Control",
-      "public, max-age=300, stale-while-revalidate=60",
-    );
-
-    res.end(body);
+    await streamDriveFileResponse({
+      res,
+      accessToken,
+      fileId: file.storage_key,
+      fileName: file.name,
+      mimeType: file.mime_type,
+      downloadMode: shouldDownload,
+      rangeHeader: typeof req.headers.range === "string" ? req.headers.range : null,
+      fallbackContentType: "application/octet-stream",
+    });
   } catch (error) {
     console.error(
       "Public Google Drive file delivery failed:",

@@ -2386,7 +2386,10 @@ app.get(
           ON i.migration_id = m.id
 
         LEFT JOIN resources r
-          ON r.storage_key = i.source_file_id
+          ON r.storage_key = COALESCE(
+            i.target_file_id,
+            i.source_file_id
+          )
 
         WHERE m.id = $1
 

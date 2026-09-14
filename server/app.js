@@ -18,6 +18,7 @@ import {
 } from "./adminAuth.js";
 import {
   getConnectedGoogleDriveAccounts,
+  getGoogleAccessTokenForAccount,
 } from "./storage/googleClient.js";
 import {
   getStorageSummary,
@@ -3280,174 +3281,143 @@ app.get("/api/file-status", async (req, res) => {
 
 app.get("/api/file", async (req, res) => {
   try {
-    const rawPath = String(req.query.path || "").trim();
-    const download = req.query.download === "1";
+    const filePath = String(req.query.path || "").trim();
 
-    if (!rawPath) {
+    if (!filePath) {
       return res.status(400).json({
-        error: "Missing path",
+        error: "File path is required",
       });
     }
 
-    const path = rawPath
-      .split("/")
-      .map((segment) => {
-        if (!segment) return "";
-
-        return encodeURIComponent(decodeURIComponent(segment))
-          .replace(/%40/gi, "@")
-          .replace(/%24/gi, "$");
-      })
-      .join("/");
-
-    if (!path.startsWith("/noticeboards/")) {
-      return res.status(400).json({
-        error: "Invalid path",
-      });
-    }
-
-    /*
-     * Find the resource in PostgreSQL.
-     */
     const result = await pool.query(
       `
-      SELECT
-        r.name,
-        r.type,
-        r.path,
-        r.url,
-        r.size,
-        r.storage_provider,
-        r.storage_key,
-        r.storage_status,
-        r.is_available
-      FROM resources r
-      WHERE r.path = $1
-      LIMIT 1
+        SELECT
+          r.storage_key,
+          r.name,
+          r.mime_type,
+          r.size,
+          g.account_id
+        FROM resources r
+        JOIN google_drive_file_accounts g
+          ON g.file_id = r.storage_key
+        WHERE r.path = $1
+          AND r.storage_provider = 'google_drive'
+          AND r.storage_status = 'synced'
+        ORDER BY g.account_id
+        LIMIT 1
       `,
-      [path]
+      [filePath],
     );
 
-    if (result.rows.length === 0) {
+    if (result.rowCount !== 1) {
       return res.status(404).json({
         error: "File not found",
-        path,
       });
     }
 
-    const resource = result.rows[0];
+    const file = result.rows[0];
 
-    if (!resource.is_available) {
-      return res.status(410).json({
-        error: "File is no longer available",
-        path,
-      });
-    }
-    if (
-      resource.storage_provider === "college" &&
-      resource.storage_status === "failed"
-    ) {
-      return res.status(410).json({
-        error: "File is no longer available on the college server",
-        path,
-      });
-    }
-
-    if (resource.type !== "file") {
-      return res.status(400).json({
-        error: "Resource is not a file",
-        path,
-      });
-    }
-
-    /*
-     * Ask the storage layer where the file lives.
-     */
-    const { getFileStream } =
-      await import("./storage/storage.js");
-
-    const storage = await getFileStream(resource);
-
-    if (storage.type === "google_drive") {
-      const response = await storage.drive.files.get(
-        {
-          fileId: resource.storage_key,
-          alt: "media",
-        },
-        {
-          responseType: "stream",
-        }
+    const accessToken =
+      await getGoogleAccessTokenForAccount(
+        file.account_id,
       );
 
-      const contentType =
-        storage.metadata?.mimeType ||
-        "application/octet-stream";
+    const url =
+      `https://www.googleapis.com/drive/v3/files/` +
+      `${encodeURIComponent(file.storage_key)}` +
+      `?alt=media`;
 
-      const contentLength =
-        storage.metadata?.size != null
-          ? String(storage.metadata.size)
-          : null;
+    const upstreamHeaders = {
+      Authorization: `Bearer ${accessToken}`,
+    };
 
-      const fileName =
-        resource.name ||
-        decodeURIComponent(
-          path.split("/").filter(Boolean).pop() ||
-          "download"
-        );
+    const range = req.get("range");
+    if (range) {
+      upstreamHeaders.Range = range;
+    }
 
-      res.setHeader("Content-Type", contentType);
+    const upstream = await fetch(url, {
+      method: "GET",
+      headers: upstreamHeaders,
+    });
 
-      if (contentLength) {
-        res.setHeader("Content-Length", contentLength);
-      }
-
-      if (download) {
-        res.setHeader(
-          "Content-Disposition",
-          contentDisposition(fileName, {
-            type: "attachment",
-          })
-        );
-      } else {
-        res.setHeader(
-          "Content-Disposition",
-          "inline"
-        );
-      }
-
-      response.data.on("error", (error) => {
-        console.error("Google Drive stream failed:", error);
-
-        if (!res.headersSent) {
-          res.status(502).json({
-            error: "Google Drive stream failed",
-            message: error.message,
-          });
-        } else {
-          res.destroy(error);
-        }
+    if (!upstream.ok) {
+      return res.status(
+        upstream.status === 404 ? 404 : 502,
+      ).json({
+        error: "Failed to load file from Google Drive",
       });
+    }
 
-      response.data.pipe(res);
+    res.status(upstream.status);
 
+    res.setHeader(
+      "Content-Type",
+      upstream.headers.get("content-type") ||
+        file.mime_type ||
+        "application/octet-stream",
+    );
+
+    const safeFileName = String(file.name || "file")
+      .replace(/[\r\n"]/g, "_");
+
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${safeFileName}"`,
+    );
+
+    res.setHeader("Accept-Ranges", "bytes");
+
+    const contentLength =
+      upstream.headers.get("content-length");
+
+    if (contentLength) {
+      res.setHeader(
+        "Content-Length",
+        contentLength,
+      );
+    }
+
+    const contentRange =
+      upstream.headers.get("content-range");
+
+    if (contentRange) {
+      res.setHeader(
+        "Content-Range",
+        contentRange,
+      );
+    }
+
+    const etag = upstream.headers.get("etag");
+    if (etag) {
+      res.setHeader("ETag", etag);
+    }
+
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=300, stale-while-revalidate=60",
+    );
+
+    if (!upstream.body) {
+      res.end();
       return;
     }
 
-    return res.status(500).json({
-      error: "Unsupported storage provider",
-      provider: storage.type,
-    });
+    const { Readable } =
+      await import("node:stream");
 
+    Readable.fromWeb(upstream.body).pipe(res);
   } catch (error) {
     console.error(
-      "File request failed:",
-      error
+      "Public Google Drive file delivery failed:",
+      error,
     );
 
-    res.status(500).json({
-      error: "Failed to read file",
-      message: error.message,
-    });
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Failed to load file",
+      });
+    }
   }
 });
 

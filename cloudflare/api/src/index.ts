@@ -10,6 +10,7 @@ import {
   isSourceCleanupMessage,
   seedPendingMigrationItems,
 } from "./migrations/queueDispatch";
+import { finalizeMigrationIfComplete } from "./migrations/finalizeMigration";
 
 app.listen(3000);
 
@@ -88,10 +89,28 @@ export default {
               delaySeconds: retryDelaySeconds(result.delayMs),
             });
             break;
+
+          case "completed":
+          case "already_handled": {
+            await finalizeMigrationIfComplete(
+              env,
+              result.migrationId,
+            );
+
+            await env.MIGRATION_QUEUE.send({
+              type: "source_cleanup_retry",
+              itemId: result.itemId,
+            });
+
+            message.ack();
+            break;
+          }
+
           default:
             message.ack();
             break;
         }
+
       } catch (error) {
         console.error(
           `Migration queue message ${message.id} failed:`,

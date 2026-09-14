@@ -1,5 +1,4 @@
 import express from "express";
-import { Readable } from "node:stream";
 import { findGoogleAccountForFile } from "./storage/driveAccounts.js";
 import cors from "cors";
 import contentDisposition from "content-disposition";
@@ -94,6 +93,7 @@ async function streamDriveFileResponse({
   downloadMode,
   rangeHeader,
   fallbackContentType,
+  fallbackContentLength,
 }) {
   const mediaUrl = new URL(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`
@@ -103,6 +103,7 @@ async function streamDriveFileResponse({
 
   const headers = {
     Authorization: `Bearer ${accessToken}`,
+    "Accept-Encoding": "identity",
   };
 
   if (rangeHeader) {
@@ -125,8 +126,23 @@ async function streamDriveFileResponse({
     mimeType ||
     fallbackContentType ||
     "application/octet-stream";
-  const contentLength = response.headers.get("content-length");
   const contentRange = response.headers.get("content-range");
+  let contentLength = response.headers.get("content-length");
+  if (!contentLength && contentRange) {
+    const rangeMatch = /^bytes\s+(\d+)-(\d+)\/\d+$/i.exec(contentRange);
+    if (rangeMatch) {
+      contentLength = String(
+        Number(rangeMatch[2]) - Number(rangeMatch[1]) + 1,
+      );
+    }
+  }
+  if (!contentLength && !contentRange && response.status === 200) {
+    contentLength =
+      fallbackContentLength === null ||
+      fallbackContentLength === undefined
+        ? null
+        : String(fallbackContentLength);
+  }
   const acceptRanges = response.headers.get("accept-ranges") || "bytes";
   const dispositionType = downloadMode ? "attachment" : "inline";
 
@@ -151,13 +167,41 @@ async function streamDriveFileResponse({
   );
 
   if (response.body) {
-    const bodyStream = Readable.fromWeb(response.body);
-    bodyStream.on("error", (error) => {
-      if (!res.writableEnded) {
-        res.destroy(error);
+    const reader = response.body.getReader();
+
+    try {
+      while (true) {
+        const chunk = await reader.read();
+
+        if (chunk.done) {
+          break;
+        }
+
+        if (!res.write(Buffer.from(chunk.value))) {
+          await new Promise((resolve, reject) => {
+            const onDrain = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = (error) => {
+              cleanup();
+              reject(error);
+            };
+            const cleanup = () => {
+              res.off("drain", onDrain);
+              res.off("error", onError);
+            };
+
+            res.once("drain", onDrain);
+            res.once("error", onError);
+          });
+        }
       }
-    });
-    bodyStream.pipe(res);
+    } finally {
+      reader.releaseLock();
+    }
+
+    res.end();
     return;
   }
 
@@ -3437,6 +3481,7 @@ app.get("/api/file", async (req, res) => {
       downloadMode: shouldDownload,
       rangeHeader: typeof req.headers.range === "string" ? req.headers.range : null,
       fallbackContentType: "application/octet-stream",
+      fallbackContentLength: file.size,
     });
   } catch (error) {
     console.error(

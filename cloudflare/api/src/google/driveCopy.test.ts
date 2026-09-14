@@ -272,6 +272,122 @@ test("restricted source uses temporary writer access", async () => {
   }
 });
 
+test("cannotSetExpiration retries temporary sharing without expiration", async () => {
+  const originalFetch = globalThis.fetch;
+  const permissionBodies: Record<string, unknown>[] = [];
+  let copyAttempts = 0;
+  let deleteCount = 0;
+
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (method === "POST" && url.includes("/files/source-1/copy")) {
+        copyAttempts += 1;
+        if (copyAttempts === 1) {
+          return Response.json(
+            { error: { errors: [{ reason: "notFound" }] } },
+            { status: 404 },
+          );
+        }
+        return Response.json({ id: "target-no-expiration", name: "large-file.pdf" });
+      }
+
+      if (method === "POST" && url.includes("/files/source-1/permissions")) {
+        const body = JSON.parse(String(init?.body ?? ""));
+        permissionBodies.push(body);
+        if (permissionBodies.length === 1) {
+          return Response.json(
+            { error: { errors: [{ reason: "cannotSetExpiration" }] } },
+            { status: 403 },
+          );
+        }
+        return Response.json({ id: "permission-no-expiration" });
+      }
+
+      if (
+        method === "DELETE" &&
+        url.includes("/permissions/permission-no-expiration")
+      ) {
+        deleteCount += 1;
+        return new Response(null, { status: 204 });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    const result = await tryDriveSideCopy({
+      sourceAccessToken: "source-token",
+      targetAccessToken: "target-token",
+      sourceMetadata: sourceMetadata(),
+      targetAccount: { email: "target@example.test" },
+      item: item(),
+    });
+
+    assert.equal(result.kind, "copied");
+    assert.equal(permissionBodies.length, 2);
+    assert.ok(permissionBodies[0].expirationTime);
+    assert.equal(permissionBodies[1].expirationTime, undefined);
+    assert.equal(deleteCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("temporary permission cleanup failure is surfaced", async () => {
+  const originalFetch = globalThis.fetch;
+  let copyAttempts = 0;
+
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (method === "POST" && url.includes("/files/source-1/copy")) {
+        copyAttempts += 1;
+        if (copyAttempts === 1) {
+          return Response.json(
+            { error: { errors: [{ reason: "notFound" }] } },
+            { status: 404 },
+          );
+        }
+        return Response.json({ id: "target-cleanup-failure" });
+      }
+
+      if (method === "POST" && url.includes("/files/source-1/permissions")) {
+        return Response.json({ id: "permission-cleanup-failure" });
+      }
+
+      if (
+        method === "DELETE" &&
+        url.includes("/permissions/permission-cleanup-failure")
+      ) {
+        return Response.json(
+          { error: { errors: [{ reason: "forbidden" }] } },
+          { status: 403 },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    };
+
+    await assert.rejects(
+      () =>
+        tryDriveSideCopy({
+          sourceAccessToken: "source-token",
+          targetAccessToken: "target-token",
+          sourceMetadata: sourceMetadata(),
+          targetAccount: { email: "target@example.test" },
+          item: item(),
+        }),
+      /Temporary source permission cleanup failed/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("small 404 falls back without sharing", async () => {
   const originalFetch =
     globalThis.fetch;

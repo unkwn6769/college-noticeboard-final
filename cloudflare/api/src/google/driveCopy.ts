@@ -2,7 +2,9 @@ import {
   copyFile,
   createPermission,
   deletePermission,
+  DriveApiError,
   type DriveFile,
+  type DrivePermission,
 } from "./drive";
 
 const DEFAULT_SHARE_THRESHOLD_BYTES =
@@ -144,14 +146,16 @@ async function deleteTemporaryPermission(
       signal,
     );
   } catch (error) {
-    if (!is404(error)) {
-      console.error(
-        "Temporary source permission cleanup failed:",
-        error instanceof Error
-          ? error.message
-          : String(error),
-      );
+    if (is404(error)) {
+      return;
     }
+
+    throw new Error(
+      `Temporary source permission cleanup failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
   }
 }
 
@@ -168,23 +172,44 @@ async function createTemporarySourcePermission(
     );
   }
 
-  const permission =
-    await createPermission(
+  let permission: DrivePermission;
+
+  try {
+    permission = await createPermission(
       sourceAccessToken,
       sourceMetadata.id,
       {
         type: "user",
         role,
-        emailAddress:
-          targetAccount.email,
-        expirationTime:
-          new Date(
-            Date.now() +
-              TEMP_PERMISSION_EXPIRATION_MS,
-          ).toISOString(),
+        emailAddress: targetAccount.email,
+        expirationTime: new Date(
+          Date.now() + TEMP_PERMISSION_EXPIRATION_MS,
+        ).toISOString(),
       },
       signal,
     );
+  } catch (error) {
+    if (
+      !(
+        error instanceof DriveApiError &&
+        error.status === 403 &&
+        error.reason === "cannotSetExpiration"
+      )
+    ) {
+      throw error;
+    }
+
+    permission = await createPermission(
+      sourceAccessToken,
+      sourceMetadata.id,
+      {
+        type: "user",
+        role,
+        emailAddress: targetAccount.email,
+      },
+      signal,
+    );
+  }
 
   if (!permission.id) {
     throw new Error(

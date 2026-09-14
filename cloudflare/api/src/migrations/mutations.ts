@@ -87,6 +87,8 @@ export async function markCompleted(
         bytes_transferred = size_bytes,
         speed_bytes_per_second = 0,
         transfer_phase = 'completed',
+        lease_expires_at = NULL,
+        next_retry_at = NULL,
         upload_session_uri_encrypted = NULL,
         upload_bytes_committed = 0,
         upload_total_bytes = 0,
@@ -121,6 +123,8 @@ export async function markFailed(
         status = 'failed',
         reserved_bytes = 0,
         transfer_phase = 'failed',
+        lease_expires_at = NULL,
+        next_retry_at = NULL,
         error_message = $1,
         finished_at = NOW(),
         updated_at = NOW()

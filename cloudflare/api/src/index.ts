@@ -11,6 +11,7 @@ import {
   seedPendingMigrationItems,
 } from "./migrations/queueDispatch";
 import { finalizeMigrationIfComplete } from "./migrations/finalizeMigration";
+import { shouldProcessQueueMessage } from "./queueLimit";
 
 app.listen(3000);
 
@@ -57,7 +58,12 @@ export default {
   },
 
   async queue(batch, env): Promise<void> {
-    for (const message of batch.messages) {
+    for (const [index, message] of batch.messages.entries()) {
+      if (!shouldProcessQueueMessage(index)) {
+        message.retry({ delaySeconds: 5 });
+        continue;
+      }
+
       try {
         if (isMigrationKickoffMessage(message.body)) {
           const result = await seedPendingMigrationItems(

@@ -2294,6 +2294,7 @@ app.get(
           ) AS active_speed_bytes_per_second,
 
           active_item.transfer_phase AS current_file_phase,
+          active_item.telemetry_mode AS current_file_telemetry_mode,
           active_item.started_at AS current_file_started_at,
           active_item.name AS current_file_name,
           active_item.target_account_id AS current_target_account_id,
@@ -2342,6 +2343,12 @@ app.get(
           END AS transfer_bytes,
           item.speed_bytes_per_second,
           item.transfer_phase,
+          CASE
+            WHEN item.transfer_phase = 'downloading'
+              AND item.target_file_id IS NULL
+              THEN 'google_drive_copy'
+            ELSE 'byte_transfer'
+          END AS telemetry_mode,
           item.started_at,
           item.target_file_id,
           item.target_account_id
@@ -2432,6 +2439,7 @@ app.get(
           active_item.transfer_bytes,
           active_item.speed_bytes_per_second,
           active_item.transfer_phase,
+          active_item.telemetry_mode,
           active_item.started_at,
           active_item.name,
           active_item.target_account_id,
@@ -2689,6 +2697,7 @@ app.get(
               status: row.current_file_status,
               startedAt: row.current_file_started_at,
               phase: row.current_file_phase,
+              telemetryMode: row.current_file_telemetry_mode,
 
               sizeBytes:
                 currentFileSize.toString(),

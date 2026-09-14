@@ -1129,59 +1129,69 @@ function AdminAccounts() {
                       </div>
 
                       <div className="text-left lg:text-right">
-                        <div className="text-lg font-bold text-slate-950">
-                          {formatBytes(
-                            migration.live.currentFile
-                              .bytesTransferred
-                          )}{" "}
-                          /{" "}
-                          {formatBytes(
-                            migration.live.currentFile
-                              .sizeBytes
-                          )}
-                        </div>
+                        {migration.live.currentFile.copyInProgress ? (
+                          <div className="text-sm font-semibold text-slate-700">
+                            Copying in Google Drive…
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-lg font-bold text-slate-950">
+                              {formatBytes(
+                                migration.live.currentFile
+                                  .bytesTransferred
+                              )}{" "}
+                              /{" "}
+                              {formatBytes(
+                                migration.live.currentFile
+                                  .sizeBytes
+                              )}
+                            </div>
 
-                        <div className="mt-1 text-xs text-slate-500">
-                          {formatSpeed(
-                            migration.live.currentFile
-                              .speedBytesPerSecond
-                          )}
-                        </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {formatSpeed(
+                                migration.live.currentFile
+                                  .speedBytesPerSecond
+                              )}
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
-                      <div
-                        className="h-full rounded-full bg-slate-900 transition-all duration-300"
-                        style={{
-                          width: `${
-                            Number(
-                              migration.live.currentFile
-                                .sizeBytes ?? 0
-                            ) > 0
-                              ? Math.min(
-                                  100,
-                                  (
-                                    Number(
-                                      migration.live
-                                        .currentFile
-                                        .bytesTransferred ??
-                                        0
-                                    ) /
+                    {!migration.live.currentFile.copyInProgress && (
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
+                        <div
+                          className="h-full rounded-full bg-slate-900 transition-all duration-300"
+                          style={{
+                            width: `${
+                              Number(
+                                migration.live.currentFile
+                                  .sizeBytes ?? 0
+                              ) > 0
+                                ? Math.min(
+                                    100,
+                                    (
                                       Number(
                                         migration.live
                                           .currentFile
-                                          .sizeBytes ??
+                                          .bytesTransferred ??
                                           0
-                                      )
-                                  ) *
-                                    100
-                                )
-                              : 0
-                          }%`,
-                        }}
-                      />
-                    </div>
+                                      ) /
+                                        Number(
+                                          migration.live
+                                            .currentFile
+                                            .sizeBytes ??
+                                            0
+                                        )
+                                    ) *
+                                      100
+                                  )
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                    )}
 
                     <div className="mt-4 grid gap-4 sm:grid-cols-3">
                       <div>
@@ -1190,10 +1200,12 @@ function AdminAccounts() {
                         </div>
 
                         <div className="mt-1 text-sm font-semibold text-slate-950">
-                          {formatSpeed(
-                            migration.live.currentFile
-                              .speedBytesPerSecond
-                          )}
+                          {migration.live.currentFile.copyInProgress
+                            ? "—"
+                            : formatSpeed(
+                                migration.live.currentFile
+                                  .speedBytesPerSecond
+                              )}
                         </div>
                       </div>
 
@@ -1203,10 +1215,12 @@ function AdminAccounts() {
                         </div>
 
                         <div className="mt-1 text-sm font-semibold text-slate-950">
-                          {formatDuration(
-                            migration.live.currentFile
-                              .etaSeconds
-                          )}
+                          {migration.live.currentFile.copyInProgress
+                            ? "—"
+                            : formatDuration(
+                                migration.live.currentFile
+                                  .etaSeconds
+                              )}
                         </div>
                       </div>
 

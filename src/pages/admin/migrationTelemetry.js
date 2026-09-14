@@ -79,6 +79,8 @@ export function deriveMigrationTelemetry(
   let derivedCurrentFile = null;
 
   if (currentFile) {
+    const isGoogleDriveCopy =
+      currentFile.telemetryMode === "google_drive_copy";
     const fileBytes =
       finiteNumber(currentFile.bytesTransferred) ?? 0;
     const fileSize =
@@ -97,7 +99,7 @@ export function deriveMigrationTelemetry(
         : null;
     const isVerifying =
       currentFile.phase === "verifying";
-    const fileSpeed = isVerifying
+    const fileSpeed = isGoogleDriveCopy || isVerifying
       ? null
       : observedFileSpeed ??
         (backendFileSpeed > 0 ? backendFileSpeed : null) ??
@@ -119,9 +121,12 @@ export function deriveMigrationTelemetry(
 
     derivedCurrentFile = {
       ...currentFile,
+      copyInProgress: isGoogleDriveCopy,
       speedBytesPerSecond: fileSpeed,
       etaSeconds:
-        !isVerifying && fileSpeed > 0
+        !isGoogleDriveCopy &&
+        !isVerifying &&
+        fileSpeed > 0
           ? remainingBytes / fileSpeed
           : null,
       elapsedSeconds: fileElapsed,

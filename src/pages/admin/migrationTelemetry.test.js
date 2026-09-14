@@ -152,3 +152,27 @@ test("verifying preserves completed bytes without transfer telemetry", () => {
   assert.equal(telemetry.currentFile.etaSeconds, null);
   assert.equal(telemetry.currentFile.elapsedSeconds, 15);
 });
+
+test("Google-side copy does not expose fake byte progress", () => {
+  const telemetry = deriveMigrationTelemetry(
+    response({
+      live: {
+        ...response().live,
+        currentFile: {
+          ...response().live.currentFile,
+          bytesTransferred: "0",
+          telemetryMode: "google_drive_copy",
+          phase: "downloading",
+          speedBytesPerSecond: 1200,
+        },
+      },
+    }),
+    null,
+    Date.parse("2026-09-14T10:00:20.000Z"),
+  );
+
+  assert.equal(telemetry.currentFile.copyInProgress, true);
+  assert.equal(telemetry.currentFile.speedBytesPerSecond, null);
+  assert.equal(telemetry.currentFile.etaSeconds, null);
+  assert.equal(telemetry.currentFile.elapsedSeconds, 15);
+});

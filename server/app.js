@@ -18,7 +18,6 @@ import {
 } from "./adminAuth.js";
 import {
   getConnectedGoogleDriveAccounts,
-  getGoogleAccessTokenForAccount,
 } from "./storage/googleClient.js";
 import {
   getStorageSummary,
@@ -3317,111 +3316,59 @@ app.get("/api/file", async (req, res) => {
 
     const file = result.rows[0];
 
-    const accessToken =
-      await getGoogleAccessTokenForAccount(
+    const drive =
+      await getGoogleDriveClientForAccount(
         file.account_id,
       );
 
-    const url =
-      `https://www.googleapis.com/drive/v3/files/` +
-      `${encodeURIComponent(file.storage_key)}` +
-      `?alt=media`;
+    const response = await drive.files.get(
+      {
+        fileId: file.storage_key,
+        alt: "media",
+      },
+      {
+        responseType: "arraybuffer",
+      },
+    );
 
-    const upstreamHeaders = {
-      Authorization: `Bearer ${accessToken}`,
-    };
+    const body = Buffer.from(
+      response.data,
+    );
 
-    const range = req.get("range");
-    if (range) {
-      upstreamHeaders.Range = range;
-    }
-
-    const upstream = await fetch(url, {
-      method: "GET",
-      headers: upstreamHeaders,
-    });
-
-    if (!upstream.ok) {
-      return res.status(
-        upstream.status === 404 ? 404 : 502,
-      ).json({
-        error: "Failed to load file from Google Drive",
-      });
-    }
-
-    res.status(upstream.status);
+    res.status(200);
 
     res.setHeader(
       "Content-Type",
-      upstream.headers.get("content-type") ||
-        file.mime_type ||
+      file.mime_type ||
+        response.headers?.["content-type"] ||
         "application/octet-stream",
     );
 
-    const safeFileName = String(file.name || "file")
-      .replace(/[\r\n"]/g, "_");
+    const safeFileName = String(
+      file.name || "file",
+    ).replace(/[\r\n"]/g, "_");
 
     res.setHeader(
       "Content-Disposition",
       `inline; filename="${safeFileName}"`,
     );
 
-    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader(
+      "Content-Length",
+      String(body.length),
+    );
 
-    const contentLength =
-      upstream.headers.get("content-length");
-
-    if (contentLength) {
-      res.setHeader(
-        "Content-Length",
-        contentLength,
-      );
-    }
-
-    const contentRange =
-      upstream.headers.get("content-range");
-
-    if (contentRange) {
-      res.setHeader(
-        "Content-Range",
-        contentRange,
-      );
-    }
-
-    const etag = upstream.headers.get("etag");
-    if (etag) {
-      res.setHeader("ETag", etag);
-    }
+    res.setHeader(
+      "Accept-Ranges",
+      "bytes",
+    );
 
     res.setHeader(
       "Cache-Control",
       "public, max-age=300, stale-while-revalidate=60",
     );
 
-    if (!upstream.body) {
-      res.end();
-      return;
-    }
-
-    const reader = upstream.body.getReader();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          break;
-        }
-
-        if (value) {
-          res.write(Buffer.from(value));
-        }
-      }
-
-      res.end();
-    } finally {
-      reader.releaseLock();
-    }
+    res.end(body);
   } catch (error) {
     console.error(
       "Public Google Drive file delivery failed:",
@@ -3429,7 +3376,7 @@ app.get("/api/file", async (req, res) => {
     );
 
     if (!res.headersSent) {
-      res.status(500).json({
+      res.status(502).json({
         error: "Failed to load file",
       });
     }

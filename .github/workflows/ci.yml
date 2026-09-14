@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+      - migration-engine-redesign
+      - badrisatwik-migration-engine-redesign
   pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read

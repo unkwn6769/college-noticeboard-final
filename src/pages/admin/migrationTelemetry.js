@@ -95,12 +95,15 @@ export function deriveMigrationTelemetry(
             previous?.timestamp,
           )
         : null;
-    const fileSpeed =
-      observedFileSpeed ??
-      (backendFileSpeed > 0 ? backendFileSpeed : null) ??
-      (currentFile.id === previous?.currentFileId
-        ? previous?.currentFileSpeedBytesPerSecond ?? null
-        : null);
+    const isVerifying =
+      currentFile.phase === "verifying";
+    const fileSpeed = isVerifying
+      ? null
+      : observedFileSpeed ??
+        (backendFileSpeed > 0 ? backendFileSpeed : null) ??
+        (currentFile.id === previous?.currentFileId
+          ? previous?.currentFileSpeedBytesPerSecond ?? null
+          : null);
     const fileElapsed =
       elapsedSeconds(
         currentFile.startedAt,
@@ -118,7 +121,7 @@ export function deriveMigrationTelemetry(
       ...currentFile,
       speedBytesPerSecond: fileSpeed,
       etaSeconds:
-        fileSpeed > 0
+        !isVerifying && fileSpeed > 0
           ? remainingBytes / fileSpeed
           : null,
       elapsedSeconds: fileElapsed,

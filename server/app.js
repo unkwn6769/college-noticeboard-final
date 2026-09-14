@@ -2281,8 +2281,12 @@ app.get(
           active_item.id AS current_item_id,
           active_item.status AS current_file_status,
           active_item.size_bytes AS current_file_size,
-          active_item.bytes_transferred AS current_file_bytes,
-          active_item.speed_bytes_per_second AS current_file_speed_bytes_per_second,
+          active_item.transfer_bytes AS current_file_bytes,
+          CASE
+            WHEN active_item.transfer_phase = 'verifying'
+              THEN NULL
+            ELSE active_item.speed_bytes_per_second
+          END AS current_file_speed_bytes_per_second,
 
           COALESCE(
             SUM(i.speed_bytes_per_second) FILTER (WHERE i.status = 'running'),
@@ -2327,10 +2331,19 @@ app.get(
           resource.name,
           item.status,
           item.size_bytes,
-          item.bytes_transferred,
+          CASE
+            WHEN item.transfer_phase = 'verifying'
+              AND item.target_file_id IS NOT NULL
+              THEN item.size_bytes
+            ELSE GREATEST(
+              item.bytes_transferred,
+              item.upload_bytes_committed
+            )
+          END AS transfer_bytes,
           item.speed_bytes_per_second,
           item.transfer_phase,
           item.started_at,
+          item.target_file_id,
           item.target_account_id
         FROM google_drive_account_migration_items item
         LEFT JOIN resources resource
@@ -2416,7 +2429,7 @@ app.get(
           active_item.id,
           active_item.status,
           active_item.size_bytes,
-          active_item.bytes_transferred,
+          active_item.transfer_bytes,
           active_item.speed_bytes_per_second,
           active_item.transfer_phase,
           active_item.started_at,
@@ -2518,7 +2531,9 @@ app.get(
           : 0;
 
       const currentFileSpeedBytesPerSecond =
-        Number(row.current_file_speed_bytes_per_second ?? 0) > 0
+        row.current_file_phase === "verifying"
+          ? 0
+          : Number(row.current_file_speed_bytes_per_second ?? 0) > 0
           ? Number(row.current_file_speed_bytes_per_second)
           : currentFileElapsedSeconds > 0
             ? Number(currentFileBytes) / currentFileElapsedSeconds
@@ -2531,6 +2546,7 @@ app.get(
           : 0n;
 
       const currentFileEtaSeconds =
+        row.current_file_phase !== "verifying" &&
         currentFileSpeedBytesPerSecond > 0
           ? Number(
             currentFileRemainingBytes

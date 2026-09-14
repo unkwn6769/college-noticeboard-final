@@ -128,3 +128,27 @@ test("uses historical duration for completed migrations", () => {
   assert.equal(telemetry.migrationElapsedSeconds, 20);
   assert.equal(telemetry.totalEtaSeconds, 0);
 });
+
+test("verifying preserves completed bytes without transfer telemetry", () => {
+  const telemetry = deriveMigrationTelemetry(
+    response({
+      live: {
+        ...response().live,
+        currentFile: {
+          ...response().live.currentFile,
+          bytesTransferred: "2000",
+          phase: "verifying",
+          speedBytesPerSecond: 900,
+          etaSeconds: 1,
+        },
+      },
+    }),
+    null,
+    Date.parse("2026-09-14T10:00:20.000Z"),
+  );
+
+  assert.equal(telemetry.currentFile.progressPct, 100);
+  assert.equal(telemetry.currentFile.speedBytesPerSecond, null);
+  assert.equal(telemetry.currentFile.etaSeconds, null);
+  assert.equal(telemetry.currentFile.elapsedSeconds, 15);
+});

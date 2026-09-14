@@ -165,7 +165,7 @@ function SearchResults() {
                     path
                   )}`
                   : `/file/${result.department}?path=${encodeURIComponent(
-                    decodeURIComponent(path)
+                    path
                   )}`;
 
               return (

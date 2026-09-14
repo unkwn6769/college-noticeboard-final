@@ -445,7 +445,7 @@ function Department() {
                   <Link
                     key={item.path}
                     to={`/file/${slug}?path=${encodeURIComponent(
-                      decodeURIComponent(item.path)
+                      item.path
                     )}&from=${encodeURIComponent(
                       decodeURIComponent(currentPath)
                     )}`}

@@ -3403,10 +3403,25 @@ app.get("/api/file", async (req, res) => {
       return;
     }
 
-    const { Readable } =
-      await import("node:stream");
+    const reader = upstream.body.getReader();
 
-    Readable.fromWeb(upstream.body).pipe(res);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        if (value) {
+          res.write(Buffer.from(value));
+        }
+      }
+
+      res.end();
+    } finally {
+      reader.releaseLock();
+    }
   } catch (error) {
     console.error(
       "Public Google Drive file delivery failed:",

@@ -32,11 +32,15 @@ jobs:
       - name: Run repository static verification
         run: bash scripts/verify-final.sh
       - name: Run database integration tests when credentials are available
-        if: ${{ secrets.DATABASE_URL != '' }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
-        run: npm test
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            npm test
+          else
+            echo "DATABASE_URL is not configured; skipping database integration tests."
+          fi
 
   frontend-and-worker:
     runs-on: ubuntu-latest
@@ -56,9 +60,13 @@ jobs:
         working-directory: cloudflare/api
         run: node --import tsx --test src/auth/encryption.test.ts src/google/drive.test.ts src/google/driveCopy.test.ts src/google/errors.test.ts src/google/resumableUpload.test.ts
       - name: Run Worker database integration tests when credentials are available
-        if: ${{ secrets.DATABASE_URL != '' }}
         working-directory: cloudflare/api
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TOKEN_ENCRYPTION_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
-        run: npm test
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            npm test
+          else
+            echo "DATABASE_URL is not configured; skipping Worker database integration tests."
+          fi

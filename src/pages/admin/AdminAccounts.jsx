@@ -907,6 +907,8 @@ function AdminAccounts() {
     migration.transferredFiles ===
     migration.totalFiles &&
     migration.cleanupFailedFiles === 0;
+  const migrationIsCompleted =
+    migration?.status === "completed";
 
   const migrationIsActive =
     migration?.status === "pending" ||
@@ -1087,7 +1089,7 @@ function AdminAccounts() {
               </div>
             )}
 
-            {migration.live && migrationIsActive && (
+            {migration.live && (
               <div className="mt-6 space-y-4">
                 {migration.live.currentFile && (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
@@ -1196,7 +1198,9 @@ function AdminAccounts() {
                     <div className="mt-4 grid gap-4 sm:grid-cols-3">
                       <div>
                         <div className="text-xs text-slate-400">
-                          Live speed
+                          {migrationIsCompleted
+                            ? "Average speed"
+                            : "Live speed"}
                         </div>
 
                         <div className="mt-1 text-sm font-semibold text-slate-950">
@@ -1304,9 +1308,11 @@ function AdminAccounts() {
                     </div>
 
                     <div className="mt-1 text-sm font-semibold text-slate-950">
-                      {formatDuration(
-                        migration.live.totalEtaSeconds
-                      )}
+                      {migrationIsCompleted
+                        ? "Completed / 0s"
+                        : formatDuration(
+                            migration.live.totalEtaSeconds
+                          )}
                     </div>
                   </div>
 

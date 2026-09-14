@@ -11,7 +11,8 @@
     "FRONTEND_URL": "https://college-noticeboard-final.pages.dev",
     "ALLOWED_ORIGINS": "https://college-noticeboard-final.pages.dev",
     "GOOGLE_DRIVE_HTTP2": "false",
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "MIGRATION_QUEUE_CONCURRENCY": "4"
   },
   "queues": {
     "consumers": [

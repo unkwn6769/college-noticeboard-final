@@ -8,7 +8,8 @@
     "start": "node preflight.js && node server.js",
     "dev": "nodemon --exec \"node preflight.js && node --env-file=../.env server.js\"",
     "preflight": "node preflight.js",
-    "test": "MIGRATION_SERVER_SIDE_COPY=false node --env-file=../.env --test migrationWorker.fencing.test.js fix67Safety.test.js activityLog.test.js sourceRetention.test.js storage/storageQuota.test.js storage/storageFileTypes.test.js storage/storageHealth.test.js recycleBin.test.js driveFileSearch.test.js migrationDriveCopy.test.js"
+    "migrate:run": "node run-migration-runner.js",
+    "test": "MIGRATION_SERVER_SIDE_COPY=true node --env-file-if-exists=../.env --test adaptiveConcurrency.test.js migrationWorker.fencing.test.js fix67Safety.test.js activityLog.test.js sourceRetention.test.js storage/storageQuota.test.js storage/storageFileTypes.test.js storage/storageHealth.test.js recycleBin.test.js driveFileSearch.test.js migrationDriveCopy.test.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

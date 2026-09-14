@@ -184,7 +184,7 @@ test("429 is retried with backoff instead of entering reconciliation", async () 
   assert.equal(calls.reconcile.length, 0);
 });
 
-test("403 falls back without a second copy", async () => {
+test("403 is reported as unavailable without a second copy", async () => {
   const { context, calls } = makeContext();
   context.targetDrive.files.copy = async (...args) => {
     calls.copy.push(args);
@@ -195,12 +195,12 @@ test("403 falls back without a second copy", async () => {
 
   const result = await tryServerSideDriveCopy(context);
 
-  assert.equal(result.kind, "fallback");
+  assert.equal(result.kind, "unavailable");
   assert.equal(calls.copy.length, 1);
   assert.equal(calls.permissionCreate.length, 0);
 });
 
-test("small 404 falls back without permission churn", async () => {
+test("small 404 is unavailable without permission churn", async () => {
   const { context, calls } = makeContext();
   context.targetDrive.files.copy = async (...args) => {
     calls.copy.push(args);
@@ -213,13 +213,13 @@ test("small 404 falls back without permission churn", async () => {
 
   const result = await tryServerSideDriveCopy(context);
 
-  assert.equal(result.kind, "fallback");
+  assert.equal(result.kind, "unavailable");
   assert.equal(calls.copy.length, 1);
   assert.equal(calls.permissionCreate.length, 0);
   assert.equal(calls.permissionDelete.length, 0);
 });
 
-test("share succeeds but copy remains 404, then falls back and cleans permission", async () => {
+test("share succeeds but copy remains 404 and cleans permission", async () => {
   const { context, calls } = makeContext();
   context.targetDrive.files.copy = async (...args) => {
     calls.copy.push(args);
@@ -231,7 +231,7 @@ test("share succeeds but copy remains 404, then falls back and cleans permission
 
   const result = await tryServerSideDriveCopy(context);
 
-  assert.equal(result.kind, "fallback");
+  assert.equal(result.kind, "unavailable");
   assert.equal(calls.permissionCreate.length, 1);
   assert.equal(calls.permissionDelete.length, 1);
   assert.equal(calls.copy.length, 6);
@@ -330,7 +330,7 @@ test("disabled feature never touches Drive", async () => {
 
   const result = await tryServerSideDriveCopy(context);
 
-  assert.equal(result.kind, "fallback");
+  assert.equal(result.kind, "unavailable");
   assert.equal(calls.copy.length, 0);
   assert.equal(calls.permissionCreate.length, 0);
   assert.equal(calls.permissionDelete.length, 0);

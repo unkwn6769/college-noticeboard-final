@@ -13,13 +13,13 @@ Backend:
 npm --prefix server run dev
 ```
 
-## Cloudflare production deployment
+## Production
 
-1. Put the real local deployment values in `.env`.
-2. Run `npx wrangler login --use-keyring` once.
-3. Run `./scripts/deploy-cloudflare.sh`.
-4. On the first run, add the printed Worker OAuth callback URLs to Google Cloud and `.env`.
-5. Run the deployment script again.
+The Node service is the migration control plane and runner. It connects
+directly to PostgreSQL using `DATABASE_URL`; Cloudflare is optional HTTP
+front-door hosting and does not execute migrations. Run the disposable runner
+with `node server/run-migration-runner.js`, or dispatch
+`.github/workflows/migration-runner.yml`.
 
 The final public endpoints are expected to be:
 

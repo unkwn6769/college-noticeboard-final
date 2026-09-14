@@ -14,6 +14,7 @@ export const ACTIVITY_EVENT_TYPES = Object.freeze({
   DRIVE_FILE_RESTORED: "drive_file.restored",
   DRIVE_FILE_PERMANENTLY_DELETED: "drive_file.permanently_deleted",
   MIGRATION_CREATED: "migration.created",
+  MIGRATION_RESUMED: "migration.resumed",
   MIGRATION_CANCEL_REQUESTED: "migration.cancel_requested",
   SOURCE_CLEANUP_RETRY: "migration.source_cleanup_retry",
 });

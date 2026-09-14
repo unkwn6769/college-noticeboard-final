@@ -1,7 +1,7 @@
 import pg from "pg";
 import { getRuntimeContext } from "../runtimeContext.js";
 
-const { Pool, Client } = pg;
+const { Pool } = pg;
 
 let nodePool = null;
 const nodePoolListeners = [];
@@ -47,100 +47,51 @@ function getNodePool() {
   return nodePool;
 }
 
-async function getRequestClient() {
+async function getRuntimeClient() {
   const context = getRuntimeContext();
-
-  if (!context) {
-    return null;
-  }
+  const connectionString = context?.env?.HYPERDRIVE?.connectionString;
+  if (!connectionString) return null;
 
   if (!context.client) {
-    const connectionString =
-      context.env?.HYPERDRIVE?.connectionString;
-
-    if (!connectionString) {
-      throw new Error(
-        "HYPERDRIVE connection string is unavailable",
-      );
-    }
-
-    context.client = new Client({
-      connectionString,
-    });
-
+    const { Client } = pg;
+    context.client = new Client({ connectionString });
     await context.client.connect();
   }
 
   return context.client;
 }
 
-async function runtimeQuery(...args) {
-  const client = await getRequestClient();
-
-  if (client) {
-    return client.query(...args);
-  }
-
-  return getNodePool().query(...args);
-}
-
-async function runtimeConnect() {
-  const context = getRuntimeContext();
-
-  if (!context) {
-    return getNodePool().connect();
-  }
-
-  const connectionString =
-    context.env?.HYPERDRIVE?.connectionString;
-
-  if (!connectionString) {
-    throw new Error(
-      "HYPERDRIVE connection string is unavailable",
-    );
-  }
-
-  const client = new Client({
-    connectionString,
-  });
-
-  await client.connect();
-
-  // Preserve pg.Pool.connect() semantics expected by the existing
-  // application code. This client owns its session and must be released
-  // independently from the request-scoped query client.
-  client.release = () => client.end();
-
-  return client;
-}
-
 export const pool = {
-  query(...args) {
-    return runtimeQuery(...args);
+  async query(...args) {
+    const client = await getRuntimeClient();
+    return (client ?? getNodePool()).query(...args);
   },
-
-  connect() {
-    return runtimeConnect();
-  },
-
-  end(...args) {
-    if (!nodePool) {
-      return Promise.resolve();
+  async connect() {
+    const context = getRuntimeContext();
+    const connectionString = context?.env?.HYPERDRIVE?.connectionString;
+    if (connectionString) {
+      const { Client } = pg;
+      const client = new Client({ connectionString });
+      await client.connect();
+      client.release = () => client.end();
+      return client;
     }
-
-    return nodePool.end(...args);
+    return getNodePool().connect();
   },
-
+  end(...args) { return nodePool ? nodePool.end(...args) : Promise.resolve(); },
   on(event, listener) {
-    if (nodePool) {
-      nodePool.on(event, listener);
-    } else {
-      nodePoolListeners.push([event, listener]);
-    }
-
+    if (nodePool) nodePool.on(event, listener);
+    else nodePoolListeners.push([event, listener]);
     return this;
   },
 };
+
+export async function closeDatabase() {
+  if (nodePool) {
+    await nodePool.end();
+    nodePool = null;
+  }
+}
 
 pool.on("error", (error) => {
   const code = error?.code;

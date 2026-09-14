@@ -8,7 +8,7 @@ echo "== Node syntax =="
 while IFS= read -r -d '' file; do
   node --check "$file" >/dev/null
   echo "OK  $file"
-done < <(find server -type f -name '*.js' -print0 | sort -z)
+done < <(find server -path '*/node_modules' -prune -o -type f -name '*.js' -print0 | sort -z)
 
 echo "== Project configuration =="
 node --input-type=module <<'NODE'

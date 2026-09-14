@@ -7,16 +7,22 @@ import {
   retryFailedSourceDeletion,
   finalizeCancellationIfIdle,
 } from "./migrationWorker.js";
+import {
+  AdaptiveConcurrency,
+  getAdaptiveConcurrencyConfig,
+} from "./adaptiveConcurrency.js";
 
-const BATCH_SIZE = Math.min(60, Math.max(1, Number(process.env.MIGRATION_FILE_WORKERS || 60)));
-const POLL_MS = 1000;
+const POLL_MS = Math.max(250, Number(process.env.MIGRATION_SCHEDULER_POLL_MS || 1000));
 const MAX_CONCURRENT_MIGRATIONS = Math.min(
   3,
   Math.max(1, Number(process.env.MIGRATION_MAX_CONCURRENT || 1))
 );
 const SCHEDULER_LEASE_ID = 1;
-const SCHEDULER_LEASE_MS = 15_000;
-const SCHEDULER_HEARTBEAT_MS = 5_000;
+const SCHEDULER_LEASE_MS = Math.max(5000, Number(process.env.MIGRATION_SCHEDULER_LEASE_MS || 15_000));
+const SCHEDULER_HEARTBEAT_MS = Math.min(
+  SCHEDULER_LEASE_MS / 2,
+  Math.max(1000, Number(process.env.MIGRATION_SCHEDULER_HEARTBEAT_MS || 5_000)),
+);
 const CLEANUP_POLL_MS = 30_000;
 const STALE_RECOVERY_POLL_MS = 10_000;
 let lastCleanupCheck = 0;
@@ -46,6 +52,8 @@ let schedulerLeaseOwnerId = null;
 let schedulerHeartbeatTimer = null;
 let schedulerStopRequested = false;
 const activeMigrationIds = new Set();
+const activeMigrationPromises = new Set();
+const migrationConcurrency = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) =>
@@ -203,8 +211,14 @@ async function findRunnableMigrations(limit) {
     `
     SELECT id
     FROM google_drive_account_migrations
-    WHERE status IN ('pending', 'running')
+    WHERE status IN ('pending', 'running', 'waiting_for_storage')
       AND cancel_requested = FALSE
+      AND EXISTS (
+        SELECT 1 FROM google_drive_account_migration_items i
+        WHERE i.migration_id = google_drive_account_migrations.id
+          AND i.status IN ('pending', 'reconciling')
+          AND (i.next_retry_at IS NULL OR i.next_retry_at <= NOW())
+      )
       AND NOT (id = ANY($1::text[]))
     ORDER BY created_at ASC
     LIMIT $2
@@ -215,20 +229,7 @@ async function findRunnableMigrations(limit) {
   return result.rows.map((row) => row.id);
 }
 
-async function ensureSchedulerLeaseSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS migration_scheduler_leases (
-      id INTEGER PRIMARY KEY,
-      owner_id TEXT NOT NULL,
-      acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-}
-
 async function acquireSchedulerLease() {
-  await ensureSchedulerLeaseSchema();
-
   const ownerId = crypto.randomUUID();
 
   const result = await pool.query(
@@ -343,11 +344,9 @@ export async function stopMigrationScheduler() {
   schedulerStopRequested = true;
   stopSchedulerHeartbeat();
 
-  if (!schedulerLeaseOwnerId) {
-    schedulerRunning = false;
-    return;
-  }
-
+  // The active processMigration calls observe this flag and finish their
+  // current item; stale leases are recovered by the next runner.
+  await Promise.allSettled([...activeMigrationPromises]);
   await releaseSchedulerLease();
   schedulerRunning = false;
 }
@@ -360,7 +359,7 @@ function launchMigration(migrationId) {
     `(active migrations: ${activeMigrationIds.size}/${MAX_CONCURRENT_MIGRATIONS})`
   );
 
-  processMigration(migrationId)
+  const promise = processMigration(migrationId)
     .catch((error) => {
       console.error(
         `[MIGRATION SCHEDULER] Migration ${migrationId} failed:`,
@@ -369,7 +368,10 @@ function launchMigration(migrationId) {
     })
     .finally(() => {
       activeMigrationIds.delete(migrationId);
+      activeMigrationPromises.delete(promise);
+      migrationConcurrency.delete(migrationId);
     });
+  activeMigrationPromises.add(promise);
 }
 
 async function retryFailedSourceDeletions() {
@@ -448,15 +450,25 @@ async function retryWaitingMigrations() {
 async function processMigration(
   migrationId
 ) {
+  const controller = new AdaptiveConcurrency(getAdaptiveConcurrencyConfig());
+  migrationConcurrency.set(migrationId, controller);
+
   while (true) {
     const result =
       await runMigrationBatch(
         migrationId,
-        BATCH_SIZE
+        controller.value
       );
+    if (result.metrics) {
+      controller.observe(result.metrics);
+    }
 
     const status =
       result.summary?.status;
+
+    if (schedulerStopRequested) {
+      return;
+    }
 
     if (
       status === "completed" ||

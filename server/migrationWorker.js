@@ -2635,7 +2635,6 @@ export async function migrateOneItem(
   let targetAccount = null;
   let targetDrive = null;
   let uploadResponse = null;
-  let trackedUploadStream = null;
 
   try {
     ensureHeartbeatStillValid();
@@ -2932,9 +2931,9 @@ export async function migrateOneItem(
       ensureHeartbeatStillValid();
 
       /*
-       * Normal attempts prefer a target-authenticated Google Drive copy when
-       * the target user is allowed to copy the source file. Otherwise we keep
-       * the existing Render-mediated streaming path.
+       * Every migration attempt uses Google's server-side copy operation.
+       * Permission or transient failures remain durable work for retry or
+       * reconciliation; file bytes never pass through this runner.
        */
       const serverSideCopyResult = await tryServerSideDriveCopy({
         sourceDrive,
@@ -2972,166 +2971,26 @@ export async function migrateOneItem(
           "verifying"
         );
       }
-    }
 
-    if (!targetFileId) {
-      const transferStartedAt = item.started_at
-          ? new Date(item.started_at)
-          : new Date();
-
-        ensureHeartbeatStillValid();
-
-        log(
-          `Downloading ${sourceMetadata.name} ` +
-          `from ${sourceAccount.email}`
-        );
-
-        const downloadResponse =
-          await sourceDrive.files.get(
-            {
-              fileId: item.source_file_id,
-              alt: "media",
-            },
-            {
-              responseType: "stream",
-              signal: abortController.signal,
-            }
-          );
-        ensureHeartbeatStillValid();
-
-        log(
-          `Uploading ${sourceMetadata.name} ` +
-          `to ${targetAccount.email}`
-        );
-
-        trackedUploadStream =
-          createTrackedUploadStream(
-            downloadResponse.data,
-            {
-              itemId: item.id,
-              leaseGeneration: item.lease_generation,
-              startedAt: transferStartedAt,
-              sizeBytes: toBigInt(
-                sourceMetadata.size ?? 0,
-                "sourceMetadata.size"
-              ),
-              abortController,
-            }
-          );
-
-        try {
-          uploadResponse =
-            await targetDrive.files.create({
-              requestBody: {
-                name: sourceMetadata.name,
-                mimeType:
-                  sourceMetadata.mimeType ||
-                  "application/octet-stream",
-                appProperties: {
-                  college_noticeboard_migration_item:
-                    item.id,
-                },
-              },
-              media: {
-                mimeType:
-                  sourceMetadata.mimeType ||
-                  "application/octet-stream",
-                body: trackedUploadStream,
-              },
-              fields:
-                "id,name,size,mimeType,md5Checksum,appProperties",
-            }, {
-              signal: abortController.signal,
-            });
-        } catch (error) {
-          if (isFencedWorkerError(error) || isAbortError(error)) {
-            throw error;
-          }
-
-          const message = `Upload outcome is uncertain for ${item.id}: ${error instanceof Error ? error.message : String(error)}`;
-          await markItemReconciling(
-            item.id,
-            item.lease_generation,
-            message,
-            RECONCILIATION_DEADLINE_MS
-          );
-
-          return {
-            status: "reconciling",
-            itemId: item.id,
-            sourceFileId: item.source_file_id,
-            targetFileId: null,
-            workerNumber,
-            reason: message,
-          };
-        }
-
-        await trackedUploadStream.getProgressState();
-
-        targetFileId =
-          uploadResponse?.data?.id ?? null;
-
-        if (!targetFileId) {
-          /*
-           * The Drive upload may have succeeded even if the response omitted
-           * the ID. Never issue a second upload blindly; reconcile by the
-           * unique migration-item marker first.
-           */
-          log(
-            `Upload response did not include a file ID; reconciling by migration marker for ${item.id}`
-          );
-
-          const recoveredTarget =
-            await findExistingTargetFileEventually(
-              targetDrive,
-              item.id
-            );
-
-          if (recoveredTarget?.id) {
-            targetFileId = recoveredTarget.id;
-            log(
-              `Recovered target ${targetFileId} after missing upload response ID`
-            );
-          } else {
-            const ambiguousUploadMessage =
-              "Google Drive upload returned no file ID and the target could not yet be recovered by migration marker";
-
-            await markItemReconciling(
-              item.id,
-              item.lease_generation,
-              ambiguousUploadMessage,
-              RECONCILIATION_DEADLINE_MS
-            );
-
-            log(
-              "Ambiguous upload response; item remains in reconciliation instead of retrying the upload blindly"
-            );
-
-            return {
-              status: "reconciling",
-              itemId: item.id,
-              sourceFileId: item.source_file_id,
-              workerNumber,
-              reason: ambiguousUploadMessage,
-            };
-          }
-        }
-
-        createdTargetFile = true;
-
-        await persistTargetFileId(
+      if (serverSideCopyResult.kind === "unavailable") {
+        const message =
+          `Google-side copy unavailable for ${item.id}: ` +
+          serverSideCopyResult.reason;
+        await markItemReconciling(
           item.id,
           item.lease_generation,
-          targetFileId
+          message,
+          RECONCILIATION_DEADLINE_MS,
         );
-
-        await updateItemProgress(
-          item.id,
-          item.lease_generation,
-          toBigInt(sourceMetadata.size ?? 0, "sourceMetadata.size"),
-          "verifying"
-        );
+        return {
+          status: "reconciling",
+          itemId: item.id,
+          sourceFileId: item.source_file_id,
+          workerNumber,
+          reason: message,
+        };
       }
+    }
 
     ensureHeartbeatStillValid();
 
